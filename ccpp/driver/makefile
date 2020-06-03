@@ -20,7 +20,7 @@ CCPP_DRIVER = CCPP_driver.F90
 LIBRARY  = libccppdriver.a
 
 # Needed for ccpp_data.mod, fv_arrays_mod.mod, ...
-FFLAGS   += -I$(FMS_DIR) -I../../gfsphysics -I../../atmos_cubed_sphere
+FFLAGS   += -I$(FMS_INC) -I../../gfsphysics -I../../atmos_cubed_sphere
 
 #CPPDEFS += -DNEW_TAUCTMAX -DSMALL_PE -DNEMS_GSM -DINTERNAL_FILE_NML
 

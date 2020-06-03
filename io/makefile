@@ -18,7 +18,7 @@ $(info $$ESMF_INC is [${ESMF_INC}])
 
 LIBRARY  = libfv3io.a
 
-FFLAGS   += -I$(FMS_DIR) -I../gfsphysics -I../ipd
+FFLAGS   += -I$(FMS_INC) -I../gfsphysics -I../ipd
 
 ifneq (,$(findstring NO_INLINE_POST,$(CPPDEFS)))
 POST_SRC = \

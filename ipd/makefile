@@ -17,7 +17,7 @@ endif
 
 LIBRARY  = libipd.a
 
-FFLAGS   += -I$(FMS_DIR) -I../gfsphysics
+FFLAGS   += -I$(FMS_INC) -I../gfsphysics
 
 CPPDEFS += -DNEW_TAUCTMAX -DSMALL_PE -DNEMS_GSM -DINTERNAL_FILE_NML
 

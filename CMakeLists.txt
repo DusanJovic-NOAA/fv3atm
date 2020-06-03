@@ -61,9 +61,9 @@ add_library(
 set_property(SOURCE atmos_cubed_sphere/model/nh_utils.F90 APPEND_STRING PROPERTY COMPILE_FLAGS "${FAST}")
 set_property(SOURCE atmos_cubed_sphere/model/fv_mapz.F90  APPEND_STRING PROPERTY COMPILE_FLAGS "${FAST}")
 
-target_link_libraries(fv3core PRIVATE fms)
 target_link_libraries(fv3core PRIVATE gfsphysics)
 target_link_libraries(fv3core PRIVATE ipd)
+target_link_libraries(fv3core PRIVATE FMS::FMS)
 
 target_include_directories(fv3core PRIVATE ${ESMF_MOD})
 
@@ -108,13 +108,13 @@ target_include_directories(fv3cap PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/stochastic
 target_compile_definitions(fv3cap PRIVATE -DESMF_VERSION_MAJOR=${ESMF_VERSION_MAJOR})
 target_include_directories(fv3cap PRIVATE ${ESMF_MOD})
 
-target_link_libraries(fv3cap PRIVATE fms)
 target_link_libraries(fv3cap PRIVATE fv3cpl)
 target_link_libraries(fv3cap PRIVATE gfsphysics)
 target_link_libraries(fv3cap PRIVATE ipd)
 target_link_libraries(fv3cap PRIVATE io)
 target_link_libraries(fv3cap PRIVATE fv3core)
 target_link_libraries(fv3cap PRIVATE stochastic_physics)
+target_link_libraries(fv3cap PRIVATE FMS::FMS)
 
 set_target_properties(fv3cap PROPERTIES Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mod)
 target_include_directories(fv3cap PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/mod)

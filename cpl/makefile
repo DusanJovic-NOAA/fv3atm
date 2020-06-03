@@ -17,18 +17,16 @@ endif
 
 LIBRARY  = libfv3cpl.a
 
-#FFLAGS   += -I$(FMS_DIR)
-
 SRCS_f   =
 
-SRCS_f90 = 
+SRCS_f90 =
 
 SRCS_F   =
 
-SRCS_F90 =         ./module_cplfields.F90   \
-		   ./module_cap_cpl.F90
+SRCS_F90 = ./module_cplfields.F90   \
+           ./module_cap_cpl.F90
 
-SRCS_c   = 
+SRCS_c   =
 
 DEPEND_FILES = $(SRCS_f) $(SRCS_f90) $(SRCS_F) $(SRCS_F90)
 
