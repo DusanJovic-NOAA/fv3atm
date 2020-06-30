@@ -63,7 +63,7 @@ set_property(SOURCE atmos_cubed_sphere/model/fv_mapz.F90  APPEND_STRING PROPERTY
 
 target_link_libraries(fv3core PRIVATE gfsphysics)
 target_link_libraries(fv3core PRIVATE ipd)
-target_link_libraries(fv3core PRIVATE FMS::FMS)
+target_link_libraries(fv3core PRIVATE ${fms_target})
 
 target_include_directories(fv3core PRIVATE atmos_cubed_sphere ${ESMF_MOD})
 
@@ -114,7 +114,7 @@ target_link_libraries(fv3cap PRIVATE ipd)
 target_link_libraries(fv3cap PRIVATE io)
 target_link_libraries(fv3cap PRIVATE fv3core)
 target_link_libraries(fv3cap PRIVATE stochastic_physics)
-target_link_libraries(fv3cap PRIVATE FMS::FMS)
+target_link_libraries(fv3cap PRIVATE ${fms_target})
 
 set_target_properties(fv3cap PROPERTIES Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mod)
 target_include_directories(fv3cap PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/mod)

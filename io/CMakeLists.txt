@@ -29,7 +29,7 @@ set_source_files_properties(post_gfs.F90 post_nems_routines.F90
 
 target_link_libraries(io gfsphysics)
 target_link_libraries(io ipd)
-target_link_libraries(io FMS::FMS)
+target_link_libraries(io ${fms_target})
 
 if(CCPP)
   target_include_directories(io PRIVATE ${CMAKE_BINARY_DIR}/FV3/ccpp/framework/src)
