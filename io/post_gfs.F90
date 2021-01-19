@@ -4,12 +4,15 @@
 !
 module post_gfs
 
-  use module_fv3_io_def,    only : wrttasks_per_group,filename_base
+  use mpi
+
+  use module_fv3_io_def,    only : wrttasks_per_group,filename_base,    &
+                                   lon1, lat1, lon2, lat2, dlon, dlat,  &
+                                   cen_lon, cen_lat, dxin=>dx, dyin=>dy, &
+                                   stdlat1, stdlat2, output_grid
   use write_internal_state, only : wrt_internal_state
 
   implicit none
-
-  include 'mpif.h'
 
   integer mype, nbdl
   logical setvar_atmfile, setvar_sfcfile, read_postcntrl
@@ -30,7 +33,8 @@ module post_gfs
       use ctlblk_mod, only : komax,ifhr,ifmin,modelname,datapd,fld_info, &
                              npset,grib,gocart_on,icount_calmict, jsta,  &
                              jend,im, nsoil, filenameflat
-      use gridspec_mod, only : maptype, gridtype
+      use gridspec_mod, only : maptype, gridtype,latstart,latlast,       &
+                               lonstart,lonlast
       use grib2_module, only : gribit2,num_pset,nrecout,first_grbtbl
       use xml_perl_data,only : paramset
 !
@@ -52,26 +56,26 @@ module post_gfs
 !***  LOCAL VARIABLES
 !-----------------------------------------------------------------------
 !
-      integer n,nwtpg,ieof,lcntrl,ierr,i,j,k,jts,jte,mynsoil
+      integer n,nwtpg,ieof,lcntrl,ierr,i,j,k,jts,jte
       integer,allocatable  :: jstagrp(:),jendgrp(:)
       integer,save         :: kpo,kth,kpv
       logical,save         :: log_postalct=.false.
       real,dimension(komax),save :: po, th, pv
-      logical        :: Log_runpost
       character(255) :: post_fname*255
 
       integer,save :: iostatusD3D=-1
-!
-      real(kind=8)   :: btim0, btim1, btim2, btim3,btim4,btim5,btim6,btim7
 !
 !      print *,'in post_run start'
 !-----------------------------------------------------------------------
 !*** set up dimensions
 !-----------------------------------------------------------------------
 !
-      btim0 = MPI_Wtime()
-
-      modelname = "GFS"
+      if (trim(output_grid) == 'gaussian_grid'                &
+          .or. trim(output_grid) == 'global_latlon') then
+        modelname = "GFS"
+      else
+        modelname = "FV3R"
+      endif
       grib      = "grib2"
       gridtype  = "A"
       nsoil     = 4
@@ -212,21 +216,25 @@ module post_gfs
 !
 !-----------------------------------------------------------------------
 !
-    subroutine post_getattr_gfs(wrt_int_state, fldbundle)
+    subroutine post_getattr_gfs(wrt_int_state)
 !
       use esmf
-      use ctlblk_mod,           only: im, jm, mpi_comm_comp
+      use ctlblk_mod,           only: im, jm, mpi_comm_comp,gdsdegr,spval
       use masks,                only: gdlat, gdlon, dx, dy
       use gridspec_mod,         only: latstart, latlast, lonstart,    &
-                                      lonlast, cenlon, cenlat
+                                      lonlast, cenlon, cenlat, dxval, &
+                                      dyval, truelat2, truelat1,psmapf, &
+                                      lonstartv, lonlastv, cenlonv,     &
+                                      latstartv, latlastv, cenlatv,     &
+                                      latstart_r,latlast_r,lonstart_r,  &
+                                      lonlast_r, STANDLON, maptype, gridtype
 !
       implicit none
 !
       type(wrt_internal_state),intent(inout)    :: wrt_int_state
-      type(ESMF_FieldBundle), intent(in)        :: fldbundle
 !
 ! local variable
-      integer i,j,k,n,kz, attcount
+      integer i,j,k,n,kz, attcount, nfb
       integer ni,naryi,nr4,nr8,rc
       integer aklen,varival
       real(4) varr4val
@@ -235,7 +243,118 @@ module post_gfs
       type(ESMF_TypeKind_Flag)           :: typekind
       real(4), dimension(:), allocatable :: ak4,bk4
       real(8), dimension(:), allocatable :: ak8,bk8
+      type(ESMF_FieldBundle)             :: fldbundle
 !
+! field bundle
+     do nfb=1, wrt_int_state%FBcount
+       fldbundle = wrt_int_state%wrtFB(nfb)
+
+! set grid spec:
+      print*,'in post_getattr_lam,output_grid=',trim(output_grid),'nfb=',nfb
+      print*,'in post_getattr_lam, lon1=',lon1,lon2,lat1,lat2,dlon,dlat
+      gdsdegr = 1000000.
+
+      if(trim(output_grid) == 'regional_latlon') then
+        MAPTYPE=0
+        gridtype='A'
+
+        if( lon1<0 ) then
+          lonstart = nint((lon1+360.)*gdsdegr)
+        else
+          lonstart = nint(lon1*gdsdegr)
+        endif
+        if( lon2<0 ) then
+          lonlast = nint((lon2+360.)*gdsdegr)
+        else
+          lonlast = nint(lon2*gdsdegr)
+        endif
+        latstart = nint(lat1*gdsdegr)
+        latlast  = nint(lat2*gdsdegr)
+
+        dxval = dlon*gdsdegr
+        dyval = dlat*gdsdegr
+
+        print*,'lonstart,latstart,dyval,dxval', &
+        lonstart,lonlast,latstart,latlast,dyval,dxval
+
+      else if(trim(output_grid) == 'lambert_conformal') then
+        MAPTYPE=1
+        GRIDTYPE='A'
+
+        if( cen_lon<0 ) then
+          cenlon = nint((cen_lon+360.)*gdsdegr)
+        else
+          cenlon = nint(cen_lon*gdsdegr)
+        endif
+        cenlat = cen_lat*gdsdegr
+        if( lon1<0 ) then
+          lonstart = nint((lon1+360.)*gdsdegr)
+        else
+          lonstart = nint(lon1*gdsdegr)
+        endif
+        if( lon2<0 ) then
+          lonlast = nint((lon2+360.)*gdsdegr)
+        else
+          lonlast = nint(lon2*gdsdegr)
+        endif
+        latstart = nint(lat1*gdsdegr)
+        latlast  = nint(lat2*gdsdegr)
+
+        truelat1 = nint(stdlat1*gdsdegr)
+        truelat2 = nint(stdlat2*gdsdegr)
+
+        if(dxin<spval) then
+          dxval = dxin*1.0e3
+          dyval = dyin*1.0e3
+        else
+          dxval = spval
+          dyval = spval
+        endif
+
+        STANDLON = cenlon
+      else if(trim(output_grid) == 'rotated_latlon') then
+        MAPTYPE=207
+        GRIDTYPE='A'
+
+        if( cen_lon<0 ) then
+          cenlon = nint((cen_lon+360.)*gdsdegr)
+        else
+          cenlon = nint(cen_lon*gdsdegr)
+        endif
+        cenlat = cen_lat*gdsdegr
+        if( lon1<0 ) then
+          lonstart = nint((lon1+360.)*gdsdegr)
+        else
+          lonstart = nint(lon1*gdsdegr)
+        endif
+        if( lon2<0 ) then
+          lonlast = nint((lon2+360.)*gdsdegr)
+        else
+          lonlast = nint(lon2*gdsdegr)
+        endif
+        latstart = nint(lat1*gdsdegr)
+        latlast  = nint(lat2*gdsdegr)
+
+        if(dlon<spval) then
+          dxval = dlon*gdsdegr
+          dyval = dlat*gdsdegr
+        else
+          dxval = spval
+          dyval = spval
+        endif
+
+        print*,'rotated latlon,lonstart,latstart,cenlon,cenlat,dyval,dxval', &
+          lonstart,lonlast,latstart,latlast,cenlon,cenlat,dyval,dxval
+      else if (trim(output_grid) == 'gaussian_grid'                &
+          .or. trim(output_grid) == 'global_latlon') then
+        lonstart = nint(wrt_int_state%lonstart*gdsdegr)
+        lonlast  = nint(wrt_int_state%lonlast*gdsdegr)
+        latstart = nint(wrt_int_state%latstart*gdsdegr)
+        latlast  = nint(wrt_int_state%latlast*gdsdegr)
+        print*,'latstart,latlast B bcast= ',latstart,latlast
+        print*,'lonstart,lonlast B bcast= ',lonstart,lonlast
+      endif
+
 ! look at the field bundle attributes
       call ESMF_AttributeGet(fldbundle, convention="NetCDF", purpose="FV3", &
         attnestflag=ESMF_ATTNEST_OFF, Count=attcount, rc=rc)
@@ -311,6 +430,8 @@ module post_gfs
         endif
 !
       enddo
+!
+      enddo !end nfb
 !      print *,'in post_getattr, dtp=',wrt_int_state%dtp
 !
     end subroutine post_getattr_gfs
@@ -355,7 +476,7 @@ module post_gfs
                              acond, sr, u10h, v10h, avgedir, avgecan,          &
                              avgetrans, avgesnow, avgprec_cont, avgcprate_cont,&
                              avisbeamswin, avisdiffswin, airbeamswin, airdiffswin, &
-                             alwoutc, alwtoac, aswoutc, aswtoac, alwinc, aswinc,& 
+                             alwoutc, alwtoac, aswoutc, aswtoac, alwinc, aswinc,&
                              avgpotevp, snoavg, ti, si, cuppt
       use soil,        only: sldpth, sh2o, smc, stc
       use masks,       only: lmv, lmh, htm, vtm, gdlat, gdlon, dx, dy, hbm2, sm, sice
@@ -364,9 +485,13 @@ module post_gfs
                              tprec, tclod, trdlw, trdsw, tsrfc, tmaxmin, theat, &
                              ardlw, ardsw, asrfc, avrain, avcnvc, iSF_SURFACE_PHYSICS,&
                              td3d, idat, sdat, ifhr, ifmin, dt, nphs, dtq2, pt_tbl, &
-                             alsl, spl, ihrst 
+                             alsl, spl, ihrst
       use params_mod,  only: erad, dtr, capa, p1000
-      use gridspec_mod,only: latstart, latlast, lonstart, lonlast, cenlon, cenlat
+      use gridspec_mod,only: latstart, latlast, lonstart, lonlast, cenlon, cenlat, &
+                             dxval, dyval, truelat2, truelat1, psmapf, cenlat,     &
+                             lonstartv, lonlastv, cenlonv, latstartv, latlastv,    &
+                             cenlatv,latstart_r,latlast_r,lonstart_r,lonlast_r,    &
+                             maptype, gridtype, STANDLON
       use lookup_mod,  only: thl, plq, ptbl, ttbl, rdq, rdth, rdp, rdthe, pl,   &
                              qs0, sqs, sthe, ttblq, rdpq, rdtheq, stheq, the0q, the0
       use physcons,    only: grav => con_g, fv => con_fvirt, rgas => con_rd,    &
@@ -378,8 +503,6 @@ module post_gfs
 !-----------------------------------------------------------------------
 !
       implicit none
-!
-      include 'mpif.h'
 !
 !-----------------------------------------------------------------------
 !
@@ -440,13 +563,6 @@ module post_gfs
           gdlon(i,j) = wrt_int_state%lonPtr(i,j)
         enddo
       enddo
-!
-      lonstart = nint(wrt_int_state%lonstart*gdsdegr)
-      lonlast  = nint(wrt_int_state%lonlast*gdsdegr)
-      latstart = nint(wrt_int_state%latstart*gdsdegr)
-      latlast  = nint(wrt_int_state%latlast*gdsdegr)
-!      print*,'latstart,latlast B bcast= ',latstart,latlast
-!      print*,'lonstart,lonlast B bcast= ',lonstart,lonlast
 
 !$omp parallel do default(none),private(i,j,ip1), &
 !$omp&  shared(jsta,jend_m,im,dx,gdlat,gdlon,dy)
@@ -735,7 +851,11 @@ module post_gfs
           !$omp parallel do default(none),private(i,j),shared(jsta,jend,ista,iend,spval,arrayr42d,sm)
           do j=jsta, jend
             do i=ista, iend
-              if (arrayr42d(i,j) /= spval) sm(i,j) = 1.- arrayr42d(i,j)
+              if (arrayr42d(i,j) /= spval) then
+                sm(i,j) = 1.- arrayr42d(i,j)
+              else
+                sm(i,j) = spval
+              endif
             enddo
           enddo
           foundland = .true.
@@ -900,6 +1020,8 @@ module post_gfs
                 do i=ista, iend
                   if (arrayr42d(i,j) /= spval) then
                     ths(i,j) = arrayr42d(i,j)
+                  else
+                    ths(i,j) = spval
                   endif
                 enddo
               enddo
@@ -910,8 +1032,11 @@ module post_gfs
               !$omp parallel do default(none) private(i,j) shared(jsta,jend,ista,iend,spval,dtq2,arrayr42d,avgcprate)
               do j=jsta,jend
                 do i=ista, iend
-                  if (arrayr42d(i,j) /= spval)   &
+                  if (arrayr42d(i,j) /= spval) then
                     avgcprate(i,j) = arrayr42d(i,j) * (dtq2*0.001)
+                  else
+                    avgcprate(i,j) = spval
+                  endif
                 enddo
               enddo
             endif
@@ -923,6 +1048,8 @@ module post_gfs
                 do i=ista, iend
                   if (arrayr42d(i,j) /= spval) then
                     avgcprate_cont(i,j) = arrayr42d(i,j) * (dtq2*0.001)
+                  else
+                    avgcprate_cont(i,j) = spval
                   endif
                 enddo
               enddo
@@ -935,6 +1062,8 @@ module post_gfs
                 do i=ista, iend
                   if (arrayr42d(i,j) /= spval) then
                     avgprec(i,j) = arrayr42d(i,j) * (dtq2*0.001)
+                  else
+                    avgprec(i,j) = spval
                   endif
                 enddo
               enddo
@@ -947,6 +1076,8 @@ module post_gfs
                 do i=ista, iend
                   if (arrayr42d(i,j) /= spval) then
                     avgprec_cont(i,j) = arrayr42d(i,j) * (dtq2*0.001)
+                  else
+                    avgprec_cont(i,j) = spval
                   endif
                 enddo
               enddo
@@ -959,6 +1090,8 @@ module post_gfs
                 do i=ista, iend
                   if (arrayr42d(i,j) /= spval) then
                     prec(i,j) = arrayr42d(i,j) * (dtq2*0.001) * 1000./dtp
+                  else
+                    prec(i,j) = spval
                   endif
                 enddo
               enddo
@@ -971,6 +1104,8 @@ module post_gfs
                 do i=ista, iend
                   if (arrayr42d(i,j) /= spval) then
                     cprate(i,j) = max(0.,arrayr42d(i,j)) * (dtq2*0.001) * 1000./dtp
+                  else
+                    cprate(i,j) = spval
                   endif
                 enddo
               enddo
@@ -2138,11 +2273,15 @@ module post_gfs
 
             ! model level gh thinkness, model output negative delz
             if(trim(fieldname)=='delz') then
-              !$omp parallel do default(none) private(i,j,l) shared(lm,jsta,jend,ista,iend,zint,arrayr43d)
+              !$omp parallel do default(none) private(i,j,l) shared(lm,jsta,jend,ista,iend,zint,arrayr43d,spval)
               do l=1,lm
                 do j=jsta,jend
                   do i=ista, iend
-                    zint(i,j,l)=-1.*arrayr43d(i,j,l)
+                    if (arrayr43d(i,j,l) /= spval) then
+                      zint(i,j,l) = -1.*arrayr43d(i,j,l)
+                    else
+                      zint(i,j,l) = spval
+                    endif
                   enddo
                 enddo
               enddo
@@ -2294,16 +2433,24 @@ module post_gfs
           if (fis(i,j) /= spval) then
             zint(i,j,lp1) = fis(i,j)
             fis(i,j)      = fis(i,j) * grav
+          else
+            zint(i,j,lp1) = spval
+            fis(i,j)      = spval
           endif
         enddo
       enddo
 
       do l=lm,1,-1
-!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,im,omga,wh,dpres,zint)
+!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,im,omga,wh,dpres,zint,spval)
         do j=jsta,jend
           do i=1,im
-            omga(i,j,l) = (-1.) * wh(i,j,l) * dpres(i,j,l)/zint(i,j,l)
-            zint(i,j,l) = zint(i,j,l) + zint(i,j,l+1)
+            if(wh(i,j,l) /= spval) then
+              omga(i,j,l) = (-1.) * wh(i,j,l) * dpres(i,j,l)/zint(i,j,l)
+              zint(i,j,l) = zint(i,j,l) + zint(i,j,l+1)
+            else
+              omga(i,j,l) = spval
+              zint(i,j,l) = spval
+            endif
           enddo
         enddo
       enddo
@@ -2317,20 +2464,28 @@ module post_gfs
       end do
 
       do l=2,lp1
-!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,im,pint,dpres)
+!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,im,pint,dpres,spval)
         do j=jsta,jend
           do i=1,im
-            pint(i,j,l) = pint(i,j,l-1) + dpres(i,j,l-1)
+            if(dpres(i,j,l-1) /= spval) then
+              pint(i,j,l) = pint(i,j,l-1) + dpres(i,j,l-1)
+            else
+              pint(i,j,l) = spval
+            endif
           enddo
         enddo
       end do
 
 !compute pmid from averaged two layer pint
       do l=lm,1,-1
-!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,im,pmid,pint)
+!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,im,pmid,pint,spval)
         do j=jsta,jend
           do i=1,im
-            pmid(i,j,l) = 0.5*(pint(i,j,l)+pint(i,j,l+1))
+            if(pint(i,j,l+1) /= spval) then
+              pmid(i,j,l) = 0.5*(pint(i,j,l)+pint(i,j,l+1))
+            else
+              pmid(i,j,l) = spval
+            endif
           enddo
         enddo
       enddo
@@ -2346,22 +2501,30 @@ module post_gfs
 
 ! compute alpint
       do l=lp1,1,-1
-!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,im,alpint,pint)
+!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,im,alpint,pint,spval)
         do j=jsta,jend
           do i=1,im
-            alpint(i,j,l)=log(pint(i,j,l))
+            if(pint(i,j,l) /= spval) then
+              alpint(i,j,l) = log(pint(i,j,l))
+            else
+              alpint(i,j,l) = spval
+            endif
           end do
         end do
       end do
 
-! compute zmid  
+! compute zmid
       do l=lm,1,-1
-!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,im,zmid,zint,pmid,alpint)
+!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,im,zmid,zint,pmid,alpint,spval)
         do j=jsta,jend
           do i=1,im
-            zmid(i,j,l)=zint(i,j,l+1)+(zint(i,j,l)-zint(i,j,l+1))* &
+            if( pmid(i,j,l) /= spval) then
+              zmid(i,j,l)=zint(i,j,l+1)+(zint(i,j,l)-zint(i,j,l+1))* &
                     (log(pmid(i,j,l))-alpint(i,j,l+1))/ &
                     (alpint(i,j,l)-alpint(i,j,l+1))
+            else
+              zmid(i,j,l) = spval
+            endif
           end do
         end do
       end do
@@ -2386,6 +2549,8 @@ module post_gfs
           if (ths(i,j) /= spval) then
             ths(i,j)  = ths(i,j)* (p1000/pint(i,j,lp1))**capa
             thz0(i,j) = ths(i,j)
+          else
+            thz0(i,j) = spval
           endif
         enddo
       enddo
@@ -2393,21 +2558,30 @@ module post_gfs
 ! compute cwm for gfdlmp
       if(  imp_physics == 11 ) then
         do l=1,lm
-!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,ista,iend,cwm,qqg,qqs,qqr,qqi,qqw)
+!$omp parallel do default(none) private(i,j) shared(l,jsta,jend,ista,iend,cwm,qqg,qqs,qqr,qqi,qqw,spval)
           do j=jsta,jend
             do i=ista,iend
-              cwm(i,j,l)=qqg(i,j,l)+qqs(i,j,l)+qqr(i,j,l)+qqi(i,j,l)+qqw(i,j,l)
+              if( qqg(i,j,l) /= spval) then
+                cwm(i,j,l) = qqg(i,j,l)+qqs(i,j,l)+qqr(i,j,l)+qqi(i,j,l)+qqw(i,j,l)
+              else
+                cwm(i,j,l) = spval
+              endif
             enddo
           enddo
         enddo
       endif
 
 ! estimate 2m pres and convert t2m to theta
-!$omp parallel do default(none) private(i,j) shared(jsta,jend,ista,iend,lm,pshltr,pint,tshltr)
+!$omp parallel do default(none) private(i,j) shared(jsta,jend,ista,iend,lm,pshltr,pint,tshltr,spval)
       do j=jsta,jend
         do i=ista, iend
-          pshltr(I,J)=pint(i,j,lm+1)*EXP(-0.068283/tshltr(i,j))
-          tshltr(i,j)= tshltr(i,j)*(p1000/pshltr(I,J))**CAPA
+          if( tshltr(i,j) /= spval) then
+            pshltr(i,j) = pint(i,j,lm+1)*EXP(-0.068283/tshltr(i,j))
+            tshltr(i,j) = tshltr(i,j)*(p1000/pshltr(I,J))**CAPA
+          else
+            pshltr(i,j) = spval
+            tshltr(i,j) = spval
+          endif
         enddo
       enddo
 
@@ -2429,6 +2603,7 @@ module post_gfs
 ! hbot
       do j=jsta,jend
         do i=1,im
+          hbot(i,j) = spval
           if(pbot(i,j) < spval)then
             do l=lm,1,-1
               if(pbot(i,j) >= pmid(i,j,l)) then
