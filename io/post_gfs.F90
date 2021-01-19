@@ -2213,12 +2213,16 @@ module post_gfs
                 enddo
               enddo
 
-              !! sig4
-              !$omp parallel do default(none) private(i,j,tlmh) shared(lm,jsta,jend,ista,iend,t,sigt4)
+              !! sigt4
+              !$omp parallel do default(none) private(i,j,tlmh) shared(lm,jsta,jend,ista,iend,t,sigt4,spval)
               do j=jsta,jend
                 do i=ista, iend
-                  tlmh = t(i,j,lm) * t(i,j,lm)
-                  sigt4(i,j) = 5.67E-8 * tlmh * tlmh
+                  if (t(i,j,lm) /= spval) then
+                    tlmh = t(i,j,lm) * t(i,j,lm)
+                    sigt4(i,j) = 5.67E-8 * tlmh * tlmh
+                  else
+                    sigt4(i,j) = spval
+                  endif
                 enddo
               enddo
             endif
@@ -2580,7 +2584,6 @@ module post_gfs
             tshltr(i,j) = tshltr(i,j)*(p1000/pshltr(I,J))**CAPA
           else
             pshltr(i,j) = spval
-            tshltr(i,j) = spval
           endif
         enddo
       enddo
