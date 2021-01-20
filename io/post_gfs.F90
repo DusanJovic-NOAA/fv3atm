@@ -219,7 +219,7 @@ module post_gfs
     subroutine post_getattr_gfs(wrt_int_state)
 !
       use esmf
-      use ctlblk_mod,           only: im, jm, mpi_comm_comp,gdsdegr,spval
+      use ctlblk_mod,           only: im, jm, mpi_comm_comp,gdsdegr
       use masks,                only: gdlat, gdlon, dx, dy
       use gridspec_mod,         only: latstart, latlast, lonstart,    &
                                       lonlast, cenlon, cenlat, dxval, &
@@ -303,13 +303,8 @@ module post_gfs
         truelat1 = nint(stdlat1*gdsdegr)
         truelat2 = nint(stdlat2*gdsdegr)
 
-        if(dxin<spval) then
-          dxval = dxin*1.0e3
-          dyval = dyin*1.0e3
-        else
-          dxval = spval
-          dyval = spval
-        endif
+        dxval = dxin*1.0e3
+        dyval = dyin*1.0e3
 
         STANDLON = cenlon
       else if(trim(output_grid) == 'rotated_latlon') then
@@ -323,28 +318,23 @@ module post_gfs
         endif
         cenlat = cen_lat*gdsdegr
         if( lon1<0 ) then
-          lonstart = nint((lon1+360.)*gdsdegr)
+          lonstart_r = nint((lon1+360.)*gdsdegr)
         else
-          lonstart = nint(lon1*gdsdegr)
+          lonstart_r = nint(lon1*gdsdegr)
         endif
         if( lon2<0 ) then
-          lonlast = nint((lon2+360.)*gdsdegr)
+          lonlast_r = nint((lon2+360.)*gdsdegr)
         else
-          lonlast = nint(lon2*gdsdegr)
+          lonlast_r = nint(lon2*gdsdegr)
         endif
-        latstart = nint(lat1*gdsdegr)
-        latlast  = nint(lat2*gdsdegr)
+        latstart_r = nint(lat1*gdsdegr)
+        latlast_r  = nint(lat2*gdsdegr)
 
-        if(dlon<spval) then
-          dxval = dlon*gdsdegr
-          dyval = dlat*gdsdegr
-        else
-          dxval = spval
-          dyval = spval
-        endif
+        dxval = dlon*gdsdegr
+        dyval = dlat*gdsdegr
 
         print*,'rotated latlon,lonstart,latstart,cenlon,cenlat,dyval,dxval', &
-          lonstart,lonlast,latstart,latlast,cenlon,cenlat,dyval,dxval
+          lonstart_r,lonlast_r,latstart_r,latlast_r,cenlon,cenlat,dyval,dxval
       else if (trim(output_grid) == 'gaussian_grid'                &
           .or. trim(output_grid) == 'global_latlon') then
         lonstart = nint(wrt_int_state%lonstart*gdsdegr)
