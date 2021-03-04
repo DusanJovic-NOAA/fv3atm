@@ -194,7 +194,7 @@ module module_write_netcdf
            else
              ncerr = nf90_def_var(ncid, trim(fldName), NF90_FLOAT, &
                      (/im_dimid,jm_dimid,pfull_dimid,time_dimid/), varids(i)); NC_ERR_STOP(ncerr)
-           endif 
+           endif
          else if (typekind == ESMF_TYPEKIND_R8) then
            ncerr = nf90_def_var(ncid, trim(fldName), NF90_DOUBLE, &
                                 (/im_dimid,jm_dimid,pfull_dimid,time_dimid/), varids(i)); NC_ERR_STOP(ncerr)
@@ -235,10 +235,7 @@ module module_write_netcdf
            call ESMF_AttributeGet(fcstField(i), convention="NetCDF", purpose="FV3", &
                                   name=trim(attName), value=varr8val, &
                                   rc=rc); ESMF_ERR_RETURN(rc)
-           if (trim(attName) /= '_FillValue') then
-              ! FIXME:  _FillValue must be cast to var type for recent versions of netcdf
-              ncerr = nf90_put_att(ncid, varids(i), trim(attName), varr8val); NC_ERR_STOP(ncerr)
-           endif
+           ncerr = nf90_put_att(ncid, varids(i), trim(attName), varr8val); NC_ERR_STOP(ncerr)
 
         else if (attTypeKind==ESMF_TYPEKIND_CHARACTER) then
            call ESMF_AttributeGet(fcstField(i), convention="NetCDF", purpose="FV3", &
@@ -591,7 +588,7 @@ module module_write_netcdf
       stop "stopped"
     end if
   end subroutine nccheck
- 
+
   elemental real function quantized(dataIn, nbits, dataMin, dataMax)
     integer, intent(in) :: nbits
     real(4), intent(in) :: dataIn, dataMin, dataMax

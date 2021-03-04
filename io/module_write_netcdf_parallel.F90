@@ -176,16 +176,16 @@ module module_write_netcdf_parallel
                        chunksizes=(/ichunk2d,jchunk2d,1/)); NC_ERR_STOP(ncerr)
             endif
             ! compression filters require collective access.
-            ncerr = nf90_var_par_access(ncid, varids(i), NF90_COLLECTIVE) 
+            ncerr = nf90_var_par_access(ncid, varids(i), NF90_COLLECTIVE)
           else
             ncerr = nf90_def_var(ncid, trim(fldName), NF90_FLOAT, &
             (/im_dimid,jm_dimid,time_dimid/), varids(i)); NC_ERR_STOP(ncerr)
-            ncerr = nf90_var_par_access(ncid, varids(i), NF90_INDEPENDENT) 
+            ncerr = nf90_var_par_access(ncid, varids(i), NF90_INDEPENDENT)
           endif
         else if (typekind == ESMF_TYPEKIND_R8) then
           ncerr = nf90_def_var(ncid, trim(fldName), NF90_DOUBLE, &
                                (/im_dimid,jm_dimid,time_dimid/), varids(i)); NC_ERR_STOP(ncerr)
-          ncerr = nf90_var_par_access(ncid, varids(i), NF90_INDEPENDENT) 
+          ncerr = nf90_var_par_access(ncid, varids(i), NF90_INDEPENDENT)
         else
           write(0,*)'Unsupported typekind ', typekind
           stop
@@ -211,16 +211,16 @@ module module_write_netcdf_parallel
                        chunksizes=(/ichunk3d,jchunk3d,kchunk3d,1/)); NC_ERR_STOP(ncerr)
             endif
             ! compression filters require collective access.
-            ncerr = nf90_var_par_access(ncid, varids(i), NF90_COLLECTIVE) 
+            ncerr = nf90_var_par_access(ncid, varids(i), NF90_COLLECTIVE)
           else
             ncerr = nf90_def_var(ncid, trim(fldName), NF90_FLOAT, &
             (/im_dimid,jm_dimid,pfull_dimid,time_dimid/), varids(i)); NC_ERR_STOP(ncerr)
-            ncerr = nf90_var_par_access(ncid, varids(i), NF90_INDEPENDENT) 
+            ncerr = nf90_var_par_access(ncid, varids(i), NF90_INDEPENDENT)
           endif
         else if (typekind == ESMF_TYPEKIND_R8) then
           ncerr = nf90_def_var(ncid, trim(fldName), NF90_DOUBLE, &
                                 (/im_dimid,jm_dimid,pfull_dimid,time_dimid/), varids(i)); NC_ERR_STOP(ncerr)
-          ncerr = nf90_var_par_access(ncid, varids(i), NF90_INDEPENDENT) 
+          ncerr = nf90_var_par_access(ncid, varids(i), NF90_INDEPENDENT)
         else
           write(0,*)'Unsupported typekind ', typekind
           stop
@@ -258,10 +258,7 @@ module module_write_netcdf_parallel
            call ESMF_AttributeGet(fcstField(i), convention="NetCDF", purpose="FV3", &
                                   name=trim(attName), value=varr8val, &
                                   rc=rc); ESMF_ERR_RETURN(rc)
-           if (trim(attName) /= '_FillValue') then
-              ! FIXME:  _FillValue must be cast to var type when using NF90_NETCDF4
-              ncerr = nf90_put_att(ncid, varids(i), trim(attName), varr8val); NC_ERR_STOP(ncerr)
-           endif
+           ncerr = nf90_put_att(ncid, varids(i), trim(attName), varr8val); NC_ERR_STOP(ncerr)
 
         else if (attTypeKind==ESMF_TYPEKIND_CHARACTER) then
            call ESMF_AttributeGet(fcstField(i), convention="NetCDF", purpose="FV3", &
@@ -618,5 +615,5 @@ module module_write_netcdf_parallel
       stop "stopped"
     end if
   end subroutine nccheck
- 
+
 end module module_write_netcdf_parallel
