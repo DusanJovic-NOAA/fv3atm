@@ -31,7 +31,7 @@
 
       use write_internal_state
       use module_fv3_io_def,   only : num_pes_fcst,                             &
-                                      n_group, num_files,                       &
+                                      num_files,                                &
                                       filename_base, output_grid, output_file,  &
                                       imo,jmo,ichunk2d,jchunk2d,                &
                                       ichunk3d,jchunk3d,kchunk3d,nbits,         &

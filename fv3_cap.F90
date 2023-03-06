@@ -13,6 +13,7 @@
 
 module fv3gfs_cap_mod
 
+  use mpi
   use ESMF
   use NUOPC
   use NUOPC_Model,            only: model_routine_SS => SetServices,         &
@@ -33,9 +34,9 @@ module fv3gfs_cap_mod
                                     cplprint_flag,output_1st_tstep_rst,      &
                                     first_kdt
 
-  use module_fv3_io_def,      only: num_pes_fcst,write_groups,               &
+  use module_fv3_io_def,      only: num_pes_fcst, write_groups,              &
                                     num_files, filename_base,                &
-                                    wrttasks_per_group, n_group,             &
+                                    wrttasks_per_group,                      &
                                     lead_wrttask, last_wrttask,              &
                                     nsout_io, iau_offset, lflname_fulltime,  &
                                     time_unlimited
@@ -59,6 +60,10 @@ module fv3gfs_cap_mod
   type(ESMF_State)                            :: fcstState
   type(ESMF_FieldBundle), allocatable         :: fcstFB(:)
   integer, save                               :: FBCount
+
+  integer                                     :: fv3cap_comm
+  integer                                     :: n_group
+  logical, allocatable                        :: write_group_avail(:)
 
   type(ESMF_GridComp),    allocatable         :: wrtComp(:)
   type(ESMF_State),       allocatable         :: wrtState(:)
@@ -218,7 +223,7 @@ module fv3gfs_cap_mod
     call ESMF_GridCompGet(gcomp,name=name,vm=vm,rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-    call ESMF_VMGet(vm, petCount=petcount, localpet=mype, rc=rc)
+    call ESMF_VMGet(vm, petCount=petcount, localpet=mype, mpiCommunicator=fv3cap_comm, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
     ! query for importState and exportState
@@ -436,6 +441,10 @@ module fv3gfs_cap_mod
       allocate(originPetList(num_pes_fcst+wrttasks_per_group_from_parent))
       allocate(targetPetList(num_pes_fcst+wrttasks_per_group_from_parent))
       if(mype == 0) print *,'af allco wrtComp,write_groups=',write_groups
+
+      allocate(write_group_avail(write_groups))
+      write_group_avail = .true. ! initialy all write groups are available
+      n_group = 1
 
 ! pull out the item names and item types from fcstState
       call ESMF_StateGet(fcstState, itemNameList=fcstItemNameList, &
@@ -836,7 +845,6 @@ module fv3gfs_cap_mod
 !***  SET THE FIRST WRITE GROUP AS THE FIRST ONE TO ACT.
 !-----------------------------------------------------------------------
 !
-      n_group = 1
 !
 !end quilting
     endif
@@ -1045,7 +1053,7 @@ module fv3gfs_cap_mod
     type(ESMF_Time)             :: startTime
     type(ESMF_TimeInterval)     :: time_elapsed
 
-    integer                     :: na, j, urc
+    integer                     :: na, j, n, urc, ierr
     integer                     :: nfseconds
     logical                     :: fcstpe
     character(len=*),parameter  :: subname='(fv3_cap:ModelAdvance_phase2)'
@@ -1095,6 +1103,22 @@ module fv3gfs_cap_mod
         call ESMF_VMEpochEnter(epoch=ESMF_VMEpoch_Buffer, rc=rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+#if 1
+        ! find available wrt_group
+        do n = 1, write_groups
+          if (write_group_avail(n)) then
+            n_group = n
+            exit
+          endif
+          if (n == write_groups ) then
+            ! all write groups are busy
+            if (mype == 0) write(0,*)'fv3_cap: all write groups are busy. consider adding more write group(s)'
+            n_group = n_group + 1
+            if (n_group > write_groups) n_group = 1
+          end if
+        end do
+        write_group_avail(n_group) = .false.  ! flag write group 'n_group' as not available (i.e. busy)
+#endif
         do j=1, FBCount
 
           if (is_moving_fb(j)) then
@@ -1126,12 +1150,19 @@ module fv3gfs_cap_mod
         call ESMF_LogWrite('Model Advance: after wrtcomp run ', ESMF_LOGMSG_INFO, rc=rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+#if 1
+        if (mype .ge. lead_wrttask(n_group) .and. mype .le. last_wrttask(n_group)) then
+          write_group_avail(n_group) = .true.
+        endif
+        ! need to fix this bcast. it will serialize all writes, which is not what we want.
+        call MPI_Bcast(write_group_avail(n_group), 1, MPI_LOGICAL, lead_wrttask(n_group), fv3cap_comm, ierr)
+#else
         if (n_group == write_groups) then
           n_group = 1
         else
           n_group = n_group + 1
         endif
-
+#endif
       endif output
 
     endif ! quilting

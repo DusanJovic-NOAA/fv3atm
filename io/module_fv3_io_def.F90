@@ -12,7 +12,6 @@ module module_fv3_io_def
 
   integer           :: num_pes_fcst
   integer           :: wrttasks_per_group, write_groups
-  integer           :: n_group
   integer           :: num_files
   integer           :: nbdlphys
   integer           :: nsout_io, iau_offset
