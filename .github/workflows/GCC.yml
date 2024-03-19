@@ -21,8 +21,8 @@ jobs:
     strategy:
       matrix:
         cmake_opts: ["-D32BIT=ON", "-D32BIT=OFF"]
-        gcc_ver: ["11"]
-        mpi: ["mpich"]
+        gcc_ver: ["13"]
+        mpi: ["openmpi"]
 
     steps:
 
@@ -41,7 +41,7 @@ jobs:
       uses: actions/cache@v3
       with:
         path: ${{ github.workspace }}/spack-develop
-        key: spack-${{ hashFiles('fv3atm/ci/spack.yaml') }}-gcc${{ matrix.gcc_ver }}-2-${{ matrix.cmake_opts }}-${{ matrix.mpich }}
+        key: spack-${{ hashFiles('fv3atm/ci/spack.yaml') }}-gcc${{ matrix.gcc_ver }}-2-${{ matrix.cmake_opts }}-${{ matrix.mpi }}
 
     # Building dependencies takes 40+ min
     - name: spack-install
