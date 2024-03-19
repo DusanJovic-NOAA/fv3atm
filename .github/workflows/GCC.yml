@@ -71,7 +71,7 @@ jobs:
         sed -i 's/doc /upp_doc /' upp/docs/CMakeLists.txt
         cd ${GITHUB_WORKSPACE}/build
         cmake ${GITHUB_WORKSPACE}/fv3atm -DBUILD_TESTING=ON ${{ matrix.cmake_opts }} -DENABLE_DOCS=ON
-        make -j2
+        make -j4 VERBOSE=1
         ls -l /home/runner/work/fv3atm/fv3atm/fv3atm/io
 
     - uses: actions/upload-artifact@v3
