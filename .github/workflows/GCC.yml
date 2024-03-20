@@ -57,7 +57,7 @@ jobs:
         spack config add "packages:all:require:['%gcc@${{ matrix.gcc_ver }}']"
         spack config add "packages:mpi:require:'${{ matrix.mpi }}'"
         spack concretize |& tee ${SPACK_ENV}/log.concretize
-        spack install -j2 --fail-fast
+        spack install -j4 --fail-fast
 
     - name: build-fv3atm
       run: |
@@ -70,6 +70,9 @@ jobs:
         mkdir ${GITHUB_WORKSPACE}/build
         sed -i 's/doc /upp_doc /' upp/docs/CMakeLists.txt
         cd ${GITHUB_WORKSPACE}/build
+        export CC=mpicc
+        export CXX=mpicxx
+        export FC=mpif90
         cmake ${GITHUB_WORKSPACE}/fv3atm -DBUILD_TESTING=ON ${{ matrix.cmake_opts }} -DENABLE_DOCS=ON
         make -j4 VERBOSE=1
         ls -l /home/runner/work/fv3atm/fv3atm/fv3atm/io
