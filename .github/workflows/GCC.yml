@@ -76,7 +76,14 @@ jobs:
       with:
         path: ${{ github.workspace }}/fv3atm
         submodules: recursive
-        
+
+    - name: cache-spack
+      id: cache-spack
+      uses: actions/cache@v3
+      with:
+        path: ${{ github.workspace }}/spack-develop
+        key: spack-${{ hashFiles('fv3atm/ci/spack.yaml') }}-gcc${{ matrix.gcc_ver }}-${{ matrix.mpi }}
+
     - name: build-fv3atm
       run: |
         . ${GITHUB_WORKSPACE}/spack-develop/share/spack/setup-env.sh
