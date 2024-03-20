@@ -22,7 +22,7 @@ jobs:
       matrix:
         cmake_opts: ["-D32BIT=ON", "-D32BIT=OFF"]
         gcc_ver: ["12"]
-        mpi: ["openmpi"]
+        mpi: ["mpich", "openmpi"]
 
     steps:
 
@@ -57,7 +57,7 @@ jobs:
         spack config add "packages:all:require:['%gcc@${{ matrix.gcc_ver }}']"
         spack config add "packages:mpi:require:'${{ matrix.mpi }}'"
         spack concretize |& tee ${SPACK_ENV}/log.concretize
-        spack install -j4 --fail-fast
+        spack install -j2 --fail-fast
 
     - name: build-fv3atm
       run: |
@@ -74,7 +74,7 @@ jobs:
         export CXX=mpicxx
         export FC=mpif90
         cmake ${GITHUB_WORKSPACE}/fv3atm -DBUILD_TESTING=ON ${{ matrix.cmake_opts }} -DENABLE_DOCS=ON
-        make -j4 VERBOSE=1
+        make -j2
         ls -l /home/runner/work/fv3atm/fv3atm/fv3atm/io
 
     - uses: actions/upload-artifact@v3
