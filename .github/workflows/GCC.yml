@@ -25,6 +25,12 @@ jobs:
 
     steps:
 
+    - name: checkout-fv3atm
+      uses: actions/checkout@v3
+      with:
+        path: ${{ github.workspace }}/fv3atm
+        submodules: recursive
+        
     - name: cache-spack
       id: cache-spack
       uses: actions/cache@v3
