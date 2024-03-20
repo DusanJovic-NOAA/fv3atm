@@ -15,7 +15,7 @@ on:
     - develop
 
 jobs:
-  setup:
+  build_spack:
     runs-on: ubuntu-latest
 
     strategy:
@@ -55,8 +55,8 @@ jobs:
         spack install -j2 --fail-fast
         spack clean --all
 
-  build:
-    needs: setup
+  build_fv3atm:
+    needs: build_spack
     runs-on: ubuntu-latest
 
     strategy:
