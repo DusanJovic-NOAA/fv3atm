@@ -21,7 +21,7 @@ jobs:
     strategy:
       matrix:
         cmake_opts: ["-D32BIT=ON", "-D32BIT=OFF"]
-        gcc_ver: ["13"]
+        gcc_ver: ["12"]
         mpi: ["openmpi"]
 
     steps:
