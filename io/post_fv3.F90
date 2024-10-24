@@ -71,7 +71,7 @@ module post_fv3
       integer,allocatable  :: istagrp(:),iendgrp(:),jstagrp(:),jendgrp(:)
       integer,save         :: kpo,kth,kpv
       logical,save         :: first_run=.true.
-      logical,save         :: read_postcntrl=.false.
+      logical,save         :: read_postcntrl=.true.
       real(4),dimension(komax),save :: po, th, pv
       character(255)       :: post_fname
       integer,save         :: iostatusD3D=-1
@@ -143,7 +143,6 @@ module post_fv3
 !-----------------------------------------------------------------------
 !
       first_grbtbl = first_run
-      read_postcntrl = .true.
 !
 !-----------------------------------------------------------------------
 !*** fill post variables with values from forecast results
@@ -167,14 +166,24 @@ module post_fv3
               do i=1,size(paramset)
                 if (associated(paramset(i)%param)) then
                   if (size(paramset(i)%param)>0) then
+                    do j=1,size(paramset(i)%param)
+                      if (associated(paramset(i)%param(j)%scale_fact_fixed_sfc1)) &
+                          deallocate(paramset(i)%param(j)%scale_fact_fixed_sfc1)
+                      if (associated(paramset(i)%param(j)%level)) &
+                          deallocate(paramset(i)%param(j)%level)
+                      if (associated(paramset(i)%param(j)%scale_fact_fixed_sfc2)) &
+                          deallocate(paramset(i)%param(j)%scale_fact_fixed_sfc2)
+                      if (associated(paramset(i)%param(j)%level2)) &
+                          deallocate(paramset(i)%param(j)%level2)
+                      if (associated(paramset(i)%param(j)%scale)) &
+                          deallocate(paramset(i)%param(j)%scale)
+                    enddo
                     deallocate(paramset(i)%param)
                     nullify(paramset(i)%param)
                   endif
                 endif
               enddo
             endif
-            deallocate(paramset)
-            nullify(paramset)
           endif
           num_pset = 0
           call read_xml()
@@ -4479,7 +4488,7 @@ module post_fv3
               if(zint(i,j,l+1) /=spval .and. t(i,j,l) /= spval .and.  alpint(i,j,l+1) /= spval  &
                              .and. alpint(i,j,l) /=spval .and. q(i,j,l) /= spval) then
                  zint(i,j,l) = zint(i,j,l+1)+(rgas/grav)*t(i,j,l)*(1.+fv*q(i,j,l))*(alpint(i,j,l+1)-alpint(i,j,l))
-               else 
+               else
                  zint(i,j,l) = spval
               endif
             endif
