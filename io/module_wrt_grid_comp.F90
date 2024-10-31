@@ -2374,20 +2374,25 @@
                                  .true., wrt_mpi_comm,wrt_int_state%mype, &
                                  grid_id,rc)
               else
-                call ESMFproto_FieldBundleWrite(gridFB, filename=trim(filename),               &
-                                                convention="NetCDF", purpose="FV3",            &
-                                                status=ESMF_FILESTATUS_REPLACE,                &
-                                                state=stateGridFB, comps=compsGridFB,rc=rc)
-
+                call write_cubed_sphere_tiles(gridFB, wrt_int_state%wrtFB(nbdl), &
+                                              trim(filename), wrt_int_state%mype,&
+                                              rc=rc)
                 if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-                call ESMFproto_FieldBundleWrite(wrt_int_state%wrtFB(nbdl),                     &
-                                                filename=trim(filename), convention="NetCDF",  &
-                                                purpose="FV3", status=ESMF_FILESTATUS_OLD,     &
-                                                timeslice=step, state=optimize(nbdl)%state,    &
-                                                comps=optimize(nbdl)%comps, rc=rc)
+                ! call ESMFproto_FieldBundleWrite(gridFB, filename=trim(filename),               &
+                !                                 convention="NetCDF", purpose="FV3",            &
+                !                                 status=ESMF_FILESTATUS_REPLACE,                &
+                !                                 state=stateGridFB, comps=compsGridFB,rc=rc)
 
-                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                ! if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+                ! call ESMFproto_FieldBundleWrite(wrt_int_state%wrtFB(nbdl),                     &
+                !                                 filename=trim(filename), convention="NetCDF",  &
+                !                                 purpose="FV3", status=ESMF_FILESTATUS_OLD,     &
+                !                                 timeslice=step, state=optimize(nbdl)%state,    &
+                !                                 comps=optimize(nbdl)%comps, rc=rc)
+
+                ! if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
               end if
 
@@ -3015,6 +3020,580 @@
 !
 !-----------------------------------------------------------------------
 !
+  subroutine write_cubed_sphere_tiles(gridFB, wrtFB, fileName, mype, rc)
+
+    use netcdf
+
+    type(ESMF_FieldBundle),     intent(in)              :: gridFB
+    type(ESMF_FieldBundle),     intent(in)              :: wrtFB
+    character(*),               intent(in)              :: fileName
+    integer,                    intent(in)              :: mype
+    integer,                    intent(out),   optional :: rc
+
+    ! Local variables
+    integer :: idx, i, n, k, j, ind
+    character(len=256) :: tileFileName
+
+    integer                          :: fieldCount
+    type(ESMF_Field),   allocatable  :: fieldList(:)
+    integer                          :: udimCount
+    character(80),      allocatable  :: udimList(:)
+    integer                          :: ncerr, ncid, dimid, varid
+    logical                          :: thereAreVerticals
+    type(ESMF_Grid)                  :: grid
+    type(ESMF_Field)                 :: field
+    logical                          :: isPresent
+    integer                          :: ch_dimid, timeiso_varid
+    character(len=ESMF_MAXSTR)       :: time_iso
+    real(ESMF_KIND_R8)               :: time
+    integer                          :: itemCount, attCount
+    character(len=80),  allocatable  :: attNameList(:)
+    character(len=80)                :: attName
+    integer                          :: valueCount
+    real(ESMF_KIND_I4), allocatable  :: valueListi4(:)
+    real(ESMF_KIND_R4), allocatable  :: valueListr4(:)
+    real(ESMF_KIND_R8), allocatable  :: valueListr8(:)
+    type(ESMF_TypeKind_Flag)         :: typekind
+    character(len=80)                :: valueS
+    integer                          :: valueI4
+    real(ESMF_KIND_R4)               :: valueR4
+    real(ESMF_KIND_R8)               :: valueR8
+
+    idx = index(trim(fileName), ".nc", .true.)
+
+    call ESMF_FieldBundleWrite(gridFB,                                 &
+                               fileName=fileName(:idx-1)//".tile*.nc", &
+                               convention="NetCDF", purpose="FV3",     &
+                               status=ESMF_FILESTATUS_REPLACE,         &
+                               iofmt=ESMF_IOFMT_NETCDF_64BIT_OFFSET,   &
+                               rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (mype == lead_write_task) then
+      do n = 1, 6
+        ! file name for tile
+        write(tileFileName, fmt='(a,i1,a)') trim(fileName(:idx-1))//".tile", n, ".nc"
+
+        ! do this work only on the root pet
+        call ESMF_FieldBundleGet(wrtFB, grid=grid, fieldCount=fieldCount, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        allocate(fieldList(fieldCount))
+        call ESMF_FieldBundleGet(wrtFB, fieldList=fieldList, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        ! open this tile's NetCDF file
+        ncerr = nf90_open(trim(tileFileName), NF90_WRITE, ncid=ncid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        ! loop over all the fields in the bundle and handle their vertical dims
+        thereAreVerticals = .false.
+        do i=1, fieldCount
+          field = fieldList(i)
+          call ESMF_AttributeGetAttPack(field, convention="NetCDF", purpose="FV3", &
+                                        isPresent=isPresent, rc=rc)
+
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          if (.not.isPresent) cycle ! field does not have the AttPack
+          call ESMF_AttributeGet(field, convention="NetCDF", purpose="FV3", &
+                                 name="ESMF:ungridded_dim_labels", isPresent=isPresent, &
+                                 itemCount=udimCount, rc=rc)
+
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          if (udimCount==0 .or. .not.isPresent) cycle ! nothing there to do
+
+          thereAreVerticals = .true.
+          allocate(udimList(udimCount))
+          call ESMF_AttributeGet(field, convention="NetCDF", purpose="FV3", &
+                                 name="ESMF:ungridded_dim_labels", valueList=udimList, rc=rc)
+
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          ! loop over all ungridded dimension labels
+          do k=1, udimCount
+            call write_out_ungridded_dim_atts(dimLabel=trim(udimList(k)), rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            ! for restart files we store ungridded dimension labels in fields
+            call write_out_ungridded_dim_atts_from_field(field, dimLabel=trim(udimList(k)), rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          enddo
+          deallocate(udimList)
+        enddo ! fieldCount
+        deallocate(fieldList)
+        if (thereAreVerticals) then
+          ! see if the vertical_dim_labels attribute exists on the grid, and
+          ! if so access it and write out verticals accordingly
+          call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                                 name="vertical_dim_labels", isPresent=isPresent, &
+                                 itemCount=udimCount, rc=rc)
+
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          if (isPresent .and. (udimCount>0) ) then
+            allocate(udimList(udimCount))
+            call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                                   name="vertical_dim_labels", valueList=udimList, rc=rc)
+
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            ! loop over all ungridded dimension labels
+            do k=1, udimCount
+              call write_out_ungridded_dim_atts(dimLabel=trim(udimList(k)), rc=rc)
+
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+            enddo
+            deallocate(udimList)
+          endif
+        endif
+        ! inquire if NetCDF file already contains the "time" variable
+        ncerr = nf90_inq_varid(ncid, "time", varid=varid)
+        if (ncerr /= NF90_NOERR) then
+          ! the variable does not exist in the NetCDF file yet -> add it
+          ! access the "time" attribute on the grid
+          call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                                 name="time", value=time, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                                 name="time_iso", value=time_iso, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          ncerr = nf90_redef(ncid=ncid)
+          if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          ncerr = nf90_inq_dimid(ncid, "time", dimid=dimid)
+          if (ncerr /= NF90_NOERR) then
+            ! "time" dimension does not yet exist, define as unlimited dim
+            ncerr = nf90_def_dim(ncid, "time", NF90_UNLIMITED, dimid=dimid)
+
+            if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+          endif
+          ncerr = nf90_def_var(ncid, "time", NF90_DOUBLE, &
+                               dimids=(/dimid/), varid=varid)
+          if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          ncerr = nf90_def_dim(ncid, "nchars", 20, ch_dimid)
+          if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+          ncerr = nf90_def_var(ncid, "time_iso", NF90_CHAR, [ch_dimid,dimid], timeiso_varid)
+          if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+          ncerr = nf90_put_att(ncid, timeiso_varid, "long_name", "valid time")
+          if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+          ncerr = nf90_put_att(ncid, timeiso_varid, "description", "ISO 8601 datetime string")
+          if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+          ncerr = nf90_put_att(ncid, timeiso_varid, "_Encoding", "UTF-8")
+          if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          ncerr = nf90_enddef(ncid=ncid)
+          if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          ncerr = nf90_put_var(ncid, varid, values=time)
+          if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          ncerr = nf90_put_var(ncid, timeiso_varid, values=[trim(time_iso)])
+          if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          ! loop over all the grid attributes that start with "time:", and
+          ! put them on the "time" variable in the NetCDF file
+
+          call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                                 name="TimeAttributes", itemCount=itemCount, rc=rc)
+
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          if (itemCount > 0) then
+            ncerr = nf90_redef(ncid=ncid)
+
+            if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+            allocate(attNameList(itemCount))
+            call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                                   name="TimeAttributes", valueList=attNameList, rc=rc)
+
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            do i=1, itemCount
+              attName = attNameList(i)
+              call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                                     name=trim(attNameList(i)), typekind=typekind, rc=rc)
+
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+              if (typekind==ESMF_TYPEKIND_CHARACTER) then
+                call ESMF_AttributeGet(grid,                               &
+                                       convention="NetCDF", purpose="FV3", &
+                                       name=trim(attNameList(i)), value=valueS, rc=rc)
+
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+                ncerr = nf90_put_att(ncid, varid, &
+                                     trim(attName(6:len(attName))), values=valueS)
+
+                if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+              else if (typekind==ESMF_TYPEKIND_I4) then
+
+                call ESMF_AttributeGet(grid,                               &
+                                       convention="NetCDF", purpose="FV3", &
+                                       name=trim(attNameList(i)), value=valueI4, rc=rc)
+
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                ncerr = nf90_put_att(ncid, varid, &
+                                     trim(attName(6:len(attName))), values=valueI4)
+
+                if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+              else if (typekind==ESMF_TYPEKIND_R4) then
+                call ESMF_AttributeGet(grid,                               &
+                                       convention="NetCDF", purpose="FV3", &
+                                       name=trim(attNameList(i)), value=valueR4, rc=rc)
+
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+                ncerr = nf90_put_att(ncid, varid, &
+                                     trim(attName(6:len(attName))), values=valueR4)
+
+                if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+              else if (typekind==ESMF_TYPEKIND_R8) then
+                call ESMF_AttributeGet(grid,                               &
+                                       convention="NetCDF", purpose="FV3", &
+                                       name=trim(attNameList(i)), value=valueR8, rc=rc)
+
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                ncerr = nf90_put_att(ncid, varid, &
+                                     trim(attName(6:len(attName))), values=valueR8)
+
+                if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+              endif
+            enddo
+            deallocate(attNameList)
+            ncerr = nf90_enddef(ncid=ncid)
+
+            if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+          endif
+        endif
+        ! close the NetCDF file
+        ncerr = nf90_close(ncid=ncid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+      end do
+    endif
+
+    call ESMF_FieldBundleWrite(wrtFB,                                  &
+                               fileName=fileName(:idx-1)//".tile*.nc", &
+                               convention="NetCDF", purpose="FV3",     &
+                               status=ESMF_FILESTATUS_OLD,             &
+                               timeslice=1,                            &
+                               iofmt=ESMF_IOFMT_NETCDF_64BIT_OFFSET,   &
+                               rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+  contains
+
+    subroutine write_out_ungridded_dim_atts(dimLabel, rc)
+      character(len=*)      :: dimLabel
+      integer, intent(out)  :: rc
+
+      logical               :: isPresent
+
+      ! inquire if NetCDF file already contains this ungridded dimension
+      ncerr = nf90_inq_varid(ncid, trim(dimLabel), varid=varid)
+      if (ncerr == NF90_NOERR) return
+      ! the variable does not exist in the NetCDF file yet -> add it
+      ! access the undistributed dimension attribute on the grid
+      call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                             name=trim(dimLabel), isPresent=isPresent, itemCount=valueCount, typekind=typekind, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      if (.not.isPresent) return ! nothing there to do
+
+      if( typekind == ESMF_TYPEKIND_R4 ) then
+        allocate(valueListr4(valueCount))
+        call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                               name=trim(dimLabel), valueList=valueListr4, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      else if ( typekind == ESMF_TYPEKIND_R8) then
+        allocate(valueListr8(valueCount))
+        call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                              name=trim(dimLabel), valueList=valueListr8, rc=rc)
+
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+      else if ( typekind == ESMF_TYPEKIND_I4) then
+        allocate(valueListi4(valueCount))
+        call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                              name=trim(dimLabel), valueList=valueListi4, rc=rc)
+
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+      else
+      endif
+      ! now add it to the NetCDF file
+      ncerr = nf90_redef(ncid=ncid)
+      if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+      ncerr = nf90_inq_dimid(ncid, trim(dimLabel), dimid=dimid)
+      if (ncerr /= NF90_NOERR) then
+        ! dimension does not yet exist, and must be defined
+        ncerr = nf90_def_dim(ncid, trim(dimLabel), valueCount, dimid=dimid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+      endif
+      if( typekind == ESMF_TYPEKIND_R4 ) then
+        ncerr = nf90_def_var(ncid, trim(dimLabel), NF90_FLOAT, &
+                             dimids=(/dimid/), varid=varid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        ncerr = nf90_enddef(ncid=ncid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        ncerr = nf90_put_var(ncid, varid, values=valueListr4)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        deallocate(valueListr4)
+      else if(typekind == ESMF_TYPEKIND_R8) then
+        ncerr = nf90_def_var(ncid, trim(dimLabel), NF90_DOUBLE, &
+                             dimids=(/dimid/), varid=varid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        ncerr = nf90_enddef(ncid=ncid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        ncerr = nf90_put_var(ncid, varid, values=valueListr8)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+        deallocate(valueListr8)
+      else if(typekind == ESMF_TYPEKIND_I4) then
+        ncerr = nf90_def_var(ncid, trim(dimLabel), NF90_INT4, &
+                             dimids=(/dimid/), varid=varid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        ncerr = nf90_enddef(ncid=ncid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        ncerr = nf90_put_var(ncid, varid, values=valueListi4)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+        deallocate(valueListi4)
+      endif
+      ! add attributes to this vertical variable
+      call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3", &
+                             attnestflag=ESMF_ATTNEST_OFF, count=attCount, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      if (attCount>0) then
+        ncerr = nf90_redef(ncid=ncid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+      endif
+      ! loop over all the attributes
+      do j=1, attCount
+        call ESMF_AttributeGet(grid, convention="NetCDF", purpose="FV3",       &
+                               attnestflag=ESMF_ATTNEST_OFF, attributeIndex=j, &
+                               name=attName, typekind=typekind, rc=rc)
+
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        ! test for name starting with trim(dimLabel)":"
+        if (index(trim(attName), trim(dimLabel)//":") == 1) then
+          ind = len(trim(dimLabel)//":")
+          ! found a matching attributes
+          if (typekind == ESMF_TYPEKIND_CHARACTER) then
+            call ESMF_AttributeGet(grid, &
+                                   convention="NetCDF", purpose="FV3", &
+                                   name=trim(attName), value=valueS, rc=rc)
+
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            ncerr = nf90_put_att(ncid, varid, &
+                                 trim(attName(ind+1:len(attName))), values=valueS)
+
+            if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          else if (typekind == ESMF_TYPEKIND_I4) then
+            call ESMF_AttributeGet(grid, &
+                                   convention="NetCDF", purpose="FV3", &
+                                   name=trim(attName), value=valueI4, rc=rc)
+
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            ncerr = nf90_put_att(ncid, varid, &
+                                 trim(attName(ind+1:len(attName))), values=valueI4)
+
+            if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          else if (typekind == ESMF_TYPEKIND_R4) then
+            call ESMF_AttributeGet(grid, &
+                                   convention="NetCDF", purpose="FV3", &
+                                   name=trim(attName), value=valueR4, rc=rc)
+
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            ncerr = nf90_put_att(ncid, varid, &
+                                 trim(attName(ind+1:len(attName))), values=valueR4)
+
+            if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          else if (typekind == ESMF_TYPEKIND_R8) then
+            call ESMF_AttributeGet(grid, &
+                                   convention="NetCDF", purpose="FV3", &
+                                   name=trim(attName), value=valueR8, rc=rc)
+
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            ncerr = nf90_put_att(ncid, varid, &
+                                 trim(attName(ind+1:len(attName))), values=valueR8)
+
+            if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+          endif
+        endif
+      enddo
+      if (attCount>0) then
+        ncerr = nf90_enddef(ncid=ncid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+      endif
+    end subroutine write_out_ungridded_dim_atts
+
+    subroutine write_out_ungridded_dim_atts_from_field(field, dimLabel, rc)
+
+      type(ESMF_Field),intent(in) :: field
+      character(len=*),intent(in) :: dimLabel
+      integer, intent(out)  :: rc
+
+      ! inquire if NetCDF file already contains this ungridded dimension
+      ncerr = nf90_inq_varid(ncid, trim(dimLabel), varid=varid)
+      if (ncerr == NF90_NOERR) return
+      ! the variable does not exist in the NetCDF file yet -> add it
+      ! access the undistributed dimension attribute on the grid
+      call ESMF_AttributeGet(field, convention="NetCDF", purpose="FV3-dim", &
+                             name=trim(dimLabel), itemCount=valueCount, typekind=typekind, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      if( typekind == ESMF_TYPEKIND_R4 ) then
+        allocate(valueListr4(valueCount))
+        call ESMF_AttributeGet(field, convention="NetCDF", purpose="FV3-dim", &
+                               name=trim(dimLabel), valueList=valueListr4, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      else if ( typekind == ESMF_TYPEKIND_R8) then
+        allocate(valueListr8(valueCount))
+        call ESMF_AttributeGet(field, convention="NetCDF", purpose="FV3-dim", &
+                              name=trim(dimLabel), valueList=valueListr8, rc=rc)
+
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+      else
+        write(0,*) 'in write_out_ungridded_dim_atts: ERROR unknown typekind'
+      endif
+      ! now add it to the NetCDF file
+      ncerr = nf90_redef(ncid=ncid)
+      if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+      ncerr = nf90_inq_dimid(ncid, trim(dimLabel), dimid=dimid)
+      if (ncerr /= NF90_NOERR) then
+        ! dimension does not yet exist, and must be defined
+        ncerr = nf90_def_dim(ncid, trim(dimLabel), valueCount, dimid=dimid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+      endif
+      if( typekind == ESMF_TYPEKIND_R4 ) then
+        ncerr = nf90_def_var(ncid, trim(dimLabel), NF90_FLOAT, &
+                             dimids=(/dimid/), varid=varid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        ncerr = nf90_enddef(ncid=ncid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        ncerr = nf90_put_var(ncid, varid, values=valueListr4)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        deallocate(valueListr4)
+      else if(typekind == ESMF_TYPEKIND_R8) then
+        ncerr = nf90_def_var(ncid, trim(dimLabel), NF90_DOUBLE, &
+                             dimids=(/dimid/), varid=varid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        ncerr = nf90_enddef(ncid=ncid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        ncerr = nf90_put_var(ncid, varid, values=valueListr8)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+        deallocate(valueListr8)
+      endif
+      ! add attributes to this vertical variable
+      call ESMF_AttributeGet(field, convention="NetCDF", purpose="FV3-dim", &
+                             attnestflag=ESMF_ATTNEST_OFF, count=attCount, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      if (attCount>0) then
+        ncerr = nf90_redef(ncid=ncid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+      endif
+      ! loop over all the attributes
+      do j=1, attCount
+        call ESMF_AttributeGet(field, convention="NetCDF", purpose="FV3-dim",       &
+                               attnestflag=ESMF_ATTNEST_OFF, attributeIndex=j, &
+                               name=attName, typekind=typekind, rc=rc)
+
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        ! test for name starting with trim(dimLabel)":"
+        if (index(trim(attName), trim(dimLabel)//":") == 1) then
+          ind = len(trim(dimLabel)//":")
+          ! found a matching attributes
+          if (typekind == ESMF_TYPEKIND_CHARACTER) then
+            call ESMF_AttributeGet(field, &
+                                   convention="NetCDF", purpose="FV3-dim", &
+                                   name=trim(attName), value=valueS, rc=rc)
+
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            ncerr = nf90_put_att(ncid, varid, &
+                                 trim(attName(ind+1:len(attName))), values=valueS)
+
+            if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          else if (typekind == ESMF_TYPEKIND_I4) then
+            call ESMF_AttributeGet(field, &
+                                   convention="NetCDF", purpose="FV3-dim", &
+                                   name=trim(attName), value=valueI4, rc=rc)
+
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            ncerr = nf90_put_att(ncid, varid, &
+                                 trim(attName(ind+1:len(attName))), values=valueI4)
+
+            if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          else if (typekind == ESMF_TYPEKIND_R4) then
+            call ESMF_AttributeGet(field, &
+                                   convention="NetCDF", purpose="FV3-dim", &
+                                   name=trim(attName), value=valueR4, rc=rc)
+
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            ncerr = nf90_put_att(ncid, varid, &
+                                 trim(attName(ind+1:len(attName))), values=valueR4)
+
+            if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          else if (typekind == ESMF_TYPEKIND_R8) then
+            call ESMF_AttributeGet(field, &
+                                   convention="NetCDF", purpose="FV3-dim", &
+                                   name=trim(attName), value=valueR8, rc=rc)
+
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            ncerr = nf90_put_att(ncid, varid, &
+                                 trim(attName(ind+1:len(attName))), values=valueR8)
+
+            if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+          endif
+        endif
+      enddo
+      if (attCount>0) then
+        ncerr = nf90_enddef(ncid=ncid)
+        if (ESMF_LogFoundNetCDFError(ncerr, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+      endif
+    end subroutine
+
+  end subroutine write_cubed_sphere_tiles
 
   subroutine ESMFproto_FieldBundleWrite(fieldbundle, fileName, &
     convention, purpose, status, timeslice, state, comps, rc)
