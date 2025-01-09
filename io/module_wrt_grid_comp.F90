@@ -3016,10 +3016,11 @@
 
     ! Local variables
     integer :: idx, i, n, k, j, ind
-    character(len=256) :: tileFileName
+    character(len=256) :: fileNameOut, tileFileName
 
     integer                          :: fieldCount
     type(ESMF_Field),   allocatable  :: fieldList(:)
+    integer                          :: tileCount
     integer                          :: udimCount
     character(80),      allocatable  :: udimList(:)
     integer                          :: ncerr, ncid, dimid, varid
@@ -3043,10 +3044,23 @@
     real(ESMF_KIND_R4)               :: valueR4
     real(ESMF_KIND_R8)               :: valueR8
 
-    idx = index(trim(fileName), ".nc", .true.)
+
+    ! find number of tiles. it should be either 1 or 6
+    call ESMF_FieldBundleGet(wrtFB, grid=grid, fieldCount=fieldCount, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_GridGet(grid, tileCount=tileCount, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (tileCount == 6) then
+      idx = index(trim(fileName), ".nc", .true.)
+      fileNameOut=fileName(:idx-1)//".tile*.nc"
+    else
+      fileNameOut=trim(fileName)
+    end if
 
     call ESMF_FieldBundleWrite(gridFB,                                 &
-                               fileName=fileName(:idx-1)//".tile*.nc", &
+                               fileName=trim(fileNameOut),             &
                                convention="NetCDF", purpose="FV3",     &
                                status=ESMF_FILESTATUS_REPLACE,         &
                                iofmt=ESMF_IOFMT_NETCDF_64BIT_OFFSET,   &
@@ -3054,17 +3068,19 @@
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
     if (mype == lead_write_task) then
-      do n = 1, 6
-        ! file name for tile
-        write(tileFileName, fmt='(a,i1,a)') trim(fileName(:idx-1))//".tile", n, ".nc"
+      do n = 1, tileCount
 
         ! do this work only on the root pet
-        call ESMF_FieldBundleGet(wrtFB, grid=grid, fieldCount=fieldCount, rc=rc)
-        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-
         allocate(fieldList(fieldCount))
         call ESMF_FieldBundleGet(wrtFB, fieldList=fieldList, rc=rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        ! file name for tile
+        if (tileCount > 1) then
+           write(tileFileName, fmt='(a,i1,a)') trim(fileName(:idx-1))//".tile", n, ".nc"
+        else
+           tileFileName = trim(fileName)
+        end if
 
         ! open this tile's NetCDF file
         ncerr = nf90_open(trim(tileFileName), NF90_WRITE, ncid=ncid)
@@ -3267,7 +3283,7 @@
     endif
 
     call ESMF_FieldBundleWrite(wrtFB,                                  &
-                               fileName=fileName(:idx-1)//".tile*.nc", &
+                               fileName=trim(fileNameOut),             &
                                convention="NetCDF", purpose="FV3",     &
                                status=ESMF_FILESTATUS_OLD,             &
                                timeslice=1,                            &
@@ -3846,7 +3862,7 @@
 
           call ESMF_GridDestroy(grid, noGarbage=.true., rc=rc)
 
-            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
           call ESMF_ArrayGet(array, distgrid=distgrid, delayout=delayout, rc=rc)
 
@@ -3854,7 +3870,7 @@
 
           call ESMF_ArrayDestroy(array, noGarbage=.true., rc=rc)
 
-            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
           call ESMF_DistGridDestroy(distgrid, noGarbage=.true., rc=rc)
 
