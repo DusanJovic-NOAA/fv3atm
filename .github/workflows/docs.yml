@@ -23,7 +23,7 @@ jobs:
         mpi: ["mpich"]
 
     steps:
-        
+
     - name: checkout-fv3atm
       uses: actions/checkout@v4
       with:
@@ -113,6 +113,9 @@ jobs:
         spack load $(spack find --format "{name}")
         cd ${GITHUB_WORKSPACE}/fv3atm
         git clone https://github.com/NOAA-EMC/CMakeModules
+        cd CMakeModules
+        git checkout cabd775
+        cd ${GITHUB_WORKSPACE}/fv3atm
         git clone --recurse-submodules https://github.com/NOAA-PSL/stochastic_physics stochastic_physics_repo
         mkdir ${GITHUB_WORKSPACE}/build
         cd ${GITHUB_WORKSPACE}/build
