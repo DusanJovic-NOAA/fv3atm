@@ -55,6 +55,7 @@
 !-----------------------------------------------------------------------
 
       private
+     public generate_dst_field_mask, add_dst_mask
 !
 !-----------------------------------------------------------------------
 !
@@ -86,6 +87,7 @@
       REAL(KIND=8), parameter  :: radi=180.0d0/pi
 !-----------------------------------------------------------------------
 !
+     integer, parameter, public :: dstOutsideMaskValue = 100
       public SetServices
 !
       interface splat
@@ -972,11 +974,18 @@
               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
               actualWrtGrid = ESMF_GridCreate(fcstGrid, newAcceptorDG, rc=rc)
               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+             call ESMF_AttributeSet(fieldbundle, convention="NetCDF", purpose="FV3-nooutput", name="output_grid", value="restart_grid", rc=rc)
+             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
             else
               actualWrtGrid = wrtGrid(grid_id)
               call ESMF_AttributeSet(fieldbundle, convention="NetCDF", purpose="FV3-nooutput", name="output_grid", value=output_grid(grid_id), rc=rc)
               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
             end if
+
+           call ESMF_GridAddItem(actualWrtGrid, itemflag=ESMF_GRIDITEM_MASK,   &
+                                 staggerloc=ESMF_STAGGERLOC_CENTER, rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
             do j=1, fieldCount
 
@@ -1007,6 +1016,9 @@
                                             ungriddedLBound=ungriddedLBound,   &
                                             ungriddedUBound=ungriddedUBound, rc=rc)
               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+             call init_field_to_missing_value(field_work, rc=rc)
+             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
               call ESMF_AttributeCopy(fcstField(j), field_work, attcopy=ESMF_ATTCOPY_REFERENCE, rc=rc)
               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
@@ -1779,7 +1791,6 @@
       integer                               :: out_phase
 !
       logical                               :: opened
-      logical                               :: lmask_fields
 !
       character(esmf_maxstr)                :: filename,compname,wrtFBName,traceString
       character(40)                         :: cfhour, cform
@@ -1815,6 +1826,8 @@
       real, allocatable                     :: output_fh(:)
       logical                               :: is_restart_bundle, restart_written
       integer                               :: tileCount
+     type(ESMF_Grid)                       :: src_grid, dst_grid
+     type(ESMF_Field)                      :: dst_field_mask
 !
 !-----------------------------------------------------------------------
 !***********************************************************************
@@ -1927,6 +1940,8 @@
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
             deallocate(fieldList)
 
+           src_grid = grid
+
             call ESMF_GridGetCoord(grid, coordDim=1, array=coordArray(1), rc=rc)
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
             call ESMF_GridGetCoord(grid, coordDim=2, array=coordArray(2), rc=rc)
@@ -2007,6 +2022,7 @@
             ! update output grid coordinates based of fcstgrid center lat/lon
             call ESMF_FieldBundleGet(file_bundle, grid=grid, rc=rc)
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+           dst_grid = grid
             call ESMF_GridGetCoord(grid, coordDim=1, farrayPtr=lonPtr, rc=rc)
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
             call ESMF_GridGetCoord(grid, coordDim=2, farrayPtr=latPtr, rc=rc)
@@ -2057,8 +2073,23 @@
               enddo
             endif
 
+           ! create file_bundle's grid (destination grid) mask with values = dstOutsideMaskValue for all 'outside' grid points, similar as in fv3_cap
+           call generate_dst_field_mask(src_grid, dst_grid, dst_field_mask, rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+           call add_dst_mask(dst_grid, dst_field_mask, dstOutsideMaskValue, rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+           call ESMF_FieldDestroy(dst_field_mask, noGarbage=.true., rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+           ! reset all fields in file_bundle to missing value
+           call reset_bundle_to_missing_value(file_bundle, rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
             call ESMF_TraceRegionEnter("ESMF_FieldBundleRegridStore()"//trim(traceString), rc=rc)
             call ESMF_FieldBundleRegridStore(mirror_bundle, file_bundle,                &
+                                            dstMaskValues=(/dstOutsideMaskValue/), &
                                              regridMethod=regridmethod, routehandle=rh, &
                                              unmappedaction=ESMF_UNMAPPEDACTION_IGNORE, &
                                              srcTermProcessing=srcTermProcessing, rc=rc)
@@ -2070,6 +2101,7 @@
           ! Regrid()
           call ESMF_TraceRegionEnter("ESMF_FieldBundleRegrid()"//trim(traceString), rc=rc)
           call ESMF_FieldBundleRegrid(mirror_bundle, file_bundle, &
+                                     zeroregion=ESMF_REGION_SELECT,       &
                                       routehandle=rh, termorderflag=(/ESMF_TERMORDER_SRCSEQ/), rc=rc)
           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
           call ESMF_TraceRegionExit("ESMF_FieldBundleRegrid()"//trim(traceString), rc=rc)
@@ -2092,34 +2124,12 @@
 !-----------------------------------------------------------------------
 !*** do post
 !-----------------------------------------------------------------------
-      lmask_fields = .false.
       if( wrt_int_state%write_dopost ) then
 #ifdef INLINE_POST
         wbeg = MPI_Wtime()
         do n=1,ngrids
 
           if (trim(output_grid(n)) /= 'cubed_sphere_grid') then
-
-            if (trim(output_grid(n)) == 'regional_latlon' .or. &
-                trim(output_grid(n)) == 'regional_latlon_moving' .or. &
-                trim(output_grid(n)) == 'rotated_latlon' .or. &
-                trim(output_grid(n)) == 'rotated_latlon_moving' .or. &
-                trim(output_grid(n)) == 'lambert_conformal') then
-
-                !mask fields according to sfc pressure, only history bundles
-                do nbdl=1, wrt_int_state%FBCount
-                  call ESMF_FieldBundleGet(wrt_int_state%wrtFB(nbdl), name=wrtFBName, rc=rc)
-                  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__,file=__FILE__)) return
-
-                  if (wrtFBName(1:8) == 'restart_') cycle
-                  if (wrtFBName(1:18) == 'cubed_sphere_grid_') cycle
-
-                  call mask_fields(wrt_int_state%wrtFB(nbdl),rc)
-                  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-                enddo
-                lmask_fields = .true.
-            endif
-
             call post_run_fv3(wrt_int_state, n, mype, wrt_mpi_comm, lead_write_task, &
                               itasks, jtasks, nf_hours, nf_minutes, nf_seconds)
           else
@@ -2409,12 +2419,6 @@
                      trim(output_grid(grid_id)) == 'rotated_latlon_moving' .or.  &
                      trim(output_grid(grid_id)) == 'lambert_conformal') then
 
-              !mask fields according to sfc pressure
-              if( .not. lmask_fields ) then
-                call mask_fields(file_bundle,rc)
-                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-              endif
-
               call write_netcdf(wrt_int_state%wrtFB(nbdl),trim(filename), &
                                 use_parallel_netcdf, wrt_mpi_comm,wrt_int_state%mype, &
                                 grid_id,rc)
@@ -2694,6 +2698,7 @@
 !$omp             private(i,j,coslon,sinlon,sinlat)
                do j=jstart, jend
                  do i=istart, iend
+                  if (cart3dPtr3dr4(1,i,j,k) < 9.99e20) then
                   coslon = cos(lonloc(i,j))
                   sinlon = sin(lonloc(i,j))
                   sinlat = sin(latloc(i,j))
@@ -2702,6 +2707,7 @@
                   vwind3dr4(i,j,k) =-cart3dPtr3dr4(1,i,j,k) * sinlat*sinlon    &
                                    + cart3dPtr3dr4(2,i,j,k) * sinlat*coslon    &
                                    + cart3dPtr3dr4(3,i,j,k) * cos(latloc(i,j))
+                  endif
                  enddo
                enddo
              enddo
@@ -2725,6 +2731,7 @@
 !$omp             private(i,j,k,coslon,sinlon,sinlat)
              do j=jstart, jend
                do i=istart, iend
+                  if (cart3dPtr2dr4(1,i,j) < 9.99e20) then
                   coslon = cos(lonloc(i,j))
                   sinlon = sin(lonloc(i,j))
                   sinlat = sin(latloc(i,j))
@@ -2733,6 +2740,7 @@
                   vwind2dr4(i,j) =-cart3dPtr2dr4(1,i,j) * sinlat*sinlon  &
                                  + cart3dPtr2dr4(2,i,j) * sinlat*coslon  &
                                  + cart3dPtr2dr4(3,i,j) * cos(latloc(i,j))
+                  endif
                enddo
              enddo
            endif
@@ -2750,7 +2758,7 @@
 !$omp parallel do default(none) shared(pressfc,jstart,jend,istart,iend) private(i,j)
          do j=jstart, jend
            do i=istart, iend
-             pressfc(i,j) = pressfc(i,j)**(grav/(rdgas*stndrd_atmos_lapse))*stndrd_atmos_ps
+             if (pressfc(i,j) < 9.99e20) pressfc(i,j) = pressfc(i,j)**(grav/(rdgas*stndrd_atmos_lapse))*stndrd_atmos_ps
            enddo
          enddo
        endif
@@ -2763,264 +2771,6 @@
 !
 !-----------------------------------------------------------------------
 !
-   subroutine mask_fields(file_bundle,rc)
-
-     type(ESMF_FieldBundle), intent(in)              :: file_bundle
-     integer,                intent(out),   optional :: rc
-!
-     integer i,j,k,ifld,fieldCount,fieldDimCount,gridDimCount
-     integer istart,iend,jstart,jend,kstart,kend
-     type(ESMF_Grid)  fieldGrid
-     type(ESMF_TypeKind_Flag) typekind
-     type(ESMF_TypeKind_Flag) attTypeKind
-     character(len=ESMF_MAXSTR) fieldName
-     type(ESMF_Field),   allocatable                  :: fcstField(:)
-     real(ESMF_KIND_R4), dimension(:,:),     pointer  :: var2dPtr2dr4
-     real(ESMF_KIND_R4), dimension(:,:,:),   pointer  :: var3dPtr3dr4
-     real(ESMF_KIND_R4), dimension(:,:,:),   pointer  :: vect3dPtr2dr4
-     real(ESMF_KIND_R4), dimension(:,:,:,:), pointer  :: vect4dPtr3dr4
-     real(ESMF_KIND_R4), dimension(:,:), allocatable  :: maskwrt
-
-     logical :: mvispresent=.false.
-     real(ESMF_KIND_R4) :: missing_value_r4=-1.e+10
-     real(ESMF_KIND_R8) :: missing_value_r8=9.99e20
-     character(len=ESMF_MAXSTR) :: msg
-
-     call ESMF_LogWrite("call mask field on wrt comp",ESMF_LOGMSG_INFO,rc=RC)
-
-! get fieldCount
-     call ESMF_FieldBundleGet(file_bundle, fieldCount=fieldCount, &
-         grid=fieldGrid, rc=rc)
-     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-        line=__LINE__, file=__FILE__)) return  ! bail out
-! get gridDimCount
-     call ESMF_GridGet(fieldgrid, dimCount=gridDimCount, rc=rc)
-     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-        line=__LINE__, file=__FILE__)) return  ! bail out
-
-     allocate(fcstField(fieldCount))
-     call ESMF_LogWrite("call mask field get fcstField",ESMF_LOGMSG_INFO,rc=RC)
-     call ESMF_FieldBundleGet(file_bundle, fieldList=fcstField, itemorderflag=ESMF_ITEMORDER_ADDORDER, rc=rc)
-
-! generate the maskwrt according to surface pressure
-     do ifld=1,fieldCount
-       !call ESMF_LogWrite("call mask field get fieldname, type dimcount",ESMF_LOGMSG_INFO,rc=RC)
-       call ESMF_FieldGet(fcstField(ifld),name=fieldName,typekind=typekind,dimCount=fieldDimCount, rc=rc)
-       !write(msg,*) 'fieldName,typekind,fieldDimCount=',trim(fieldName),typekind,fieldDimCount
-       !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-       if (.not. allocated(maskwrt)) then
-         if ( typekind == ESMF_TYPEKIND_R4 .and. fieldDimCount == gridDimCount) then
-           call ESMF_FieldGet(fcstField(ifld),localDe=0, farrayPtr=var2dPtr2dr4, rc=rc)
-           istart = lbound(var2dPtr2dr4,1)
-           iend   = ubound(var2dPtr2dr4,1)
-           jstart = lbound(var2dPtr2dr4,2)
-           jend   = ubound(var2dPtr2dr4,2)
-           allocate(maskwrt(istart:iend,jstart:jend))
-           maskwrt(istart:iend,jstart:jend)=1.0
-         endif
-       endif
-       if(index(trim(fieldName),"pressfc")>0) then
-         call ESMF_FieldGet(fcstField(ifld),localDe=0, farrayPtr=var2dPtr2dr4, rc=rc)
-         istart = lbound(var2dPtr2dr4,1)
-         iend   = ubound(var2dPtr2dr4,1)
-         jstart = lbound(var2dPtr2dr4,2)
-         jend   = ubound(var2dPtr2dr4,2)
-         if (.not. allocated(maskwrt)) then
-           allocate(maskwrt(istart:iend,jstart:jend))
-           maskwrt(istart:iend,jstart:jend)=1.0
-         endif
-!$omp parallel do default(shared) private(i,j)
-         do j=jstart, jend
-           do i=istart, iend
-             if(abs(var2dPtr2dr4(i,j)-0.) < 1.0e-6) maskwrt(i,j)=0.
-           enddo
-         enddo
-         call ESMF_LogWrite("call mask field pressfc found, maskwrt generated",ESMF_LOGMSG_INFO,rc=RC)
-         exit
-       endif
-     enddo
-
-! loop to mask all fields according to maskwrt
-     do ifld=1,fieldCount
-       !call ESMF_LogWrite("call mask field get fieldname, type dimcount",ESMF_LOGMSG_INFO,rc=RC)
-       call ESMF_FieldGet(fcstField(ifld),name=fieldName,typekind=typekind,dimCount=fieldDimCount, rc=rc)
-       !write(msg,*) 'fieldName,typekind,fieldDimCount=',trim(fieldName),typekind,fieldDimCount
-       !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-       ! For vector fields
-       if(index(trim(fieldName),"vector")>0) then
-         ! Only work on ESMF_TYPEKIND_R4 fields for now
-         if ( typekind == ESMF_TYPEKIND_R4 ) then
-           ! 3-d vector fields with 4-d arrays
-           if( fieldDimCount > gridDimCount+1 ) then
-             !call ESMF_LogWrite("call mask field get vector 3d farray",ESMF_LOGMSG_INFO,rc=RC)
-             call ESMF_FieldGet(fcstField(ifld), localDe=0, farrayPtr=vect4dPtr3dr4, rc=rc)
-               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-                 line=__LINE__, file=__FILE__)) return  ! bail out
-             if( ubound(vect4dPtr3dr4,1)-lbound(vect4dPtr3dr4,1)+1/=3 ) then
-               rc=991
-               write(0,*) 'ERROR, 3D the vector dimension /= 3, rc=',rc
-               call ESMF_Finalize(endflag=ESMF_END_ABORT)
-             endif
-             ! Get the _FillValue from the field attribute if exists
-             call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                 name="_FillValue", typekind=attTypeKind, isPresent=mvispresent, rc=rc)
-             !write(msg,*) 'fieldName,attTypeKind,isPresent=',trim(fieldName),attTypeKind,mvispresent
-             !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-             if ( mvispresent ) then
-               if (attTypeKind==ESMF_TYPEKIND_R4) then
-                 call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                        name="_FillValue", value=missing_value_r4, isPresent=mvispresent, rc=rc)
-                 !write(msg,*) 'fieldName,_FillValue,isPresent=',trim(fieldName),missing_value_r4,mvispresent
-                 !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-               else if (attTypeKind==ESMF_TYPEKIND_R8) then
-                 call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                        name="_FillValue", value=missing_value_r8, isPresent=mvispresent, rc=rc)
-                 !write(msg,*) 'fieldName,_FillValue,isPresent=',trim(fieldName),missing_value_r8,mvispresent
-                 !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-               endif
-               istart = lbound(vect4dPtr3dr4,2)
-               iend   = ubound(vect4dPtr3dr4,2)
-               jstart = lbound(vect4dPtr3dr4,3)
-               jend   = ubound(vect4dPtr3dr4,3)
-               kstart = lbound(vect4dPtr3dr4,4)
-               kend   = ubound(vect4dPtr3dr4,4)
-!$omp parallel do default(shared) private(i,j,k)
-               do k=kstart,kend
-                 do j=jstart, jend
-                   do i=istart, iend
-                     if (maskwrt(i,j)<1.0 .and. attTypeKind==ESMF_TYPEKIND_R4) vect4dPtr3dr4(:,i,j,k)=missing_value_r4
-                     if (maskwrt(i,j)<1.0 .and. attTypeKind==ESMF_TYPEKIND_R8) vect4dPtr3dr4(:,i,j,k)=missing_value_r8
-                   enddo
-                 enddo
-               enddo
-             endif !mvispresent
-           ! 2-d vector fields with 3-d arrays
-           else
-             call ESMF_FieldGet(fcstField(ifld), localDe=0, farrayPtr=vect3dPtr2dr4, rc=rc)
-               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-                 line=__LINE__, file=__FILE__)) return  ! bail out
-             if( ubound(vect3dPtr2dr4,1)-lbound(vect3dPtr2dr4,1)+1 /= 3 ) then
-               rc=991
-               write(0,*) 'ERROR, 2D the vector dimension /= 3, rc=',rc
-               call ESMF_Finalize(endflag=ESMF_END_ABORT)
-             endif
-             ! Get the _FillValue from the field attribute if exists
-             call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                 name="_FillValue", typekind=attTypeKind, isPresent=mvispresent, rc=rc)
-             !write(msg,*) 'fieldName,attTypeKind,isPresent=',trim(fieldName),attTypeKind,mvispresent
-             !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-             if ( mvispresent ) then
-               if (attTypeKind==ESMF_TYPEKIND_R4) then
-                 call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                        name="_FillValue", value=missing_value_r4, isPresent=mvispresent, rc=rc)
-                 !write(msg,*) 'fieldName,_FillValue,isPresent=',trim(fieldName),missing_value_r4,mvispresent
-                 !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-               else if (attTypeKind==ESMF_TYPEKIND_R8) then
-                 call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                        name="_FillValue", value=missing_value_r8, isPresent=mvispresent, rc=rc)
-                 !write(msg,*) 'fieldName,_FillValue,isPresent=',trim(fieldName),missing_value_r8,mvispresent
-                 !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-               endif
-               istart = lbound(vect3dPtr2dr4,2)
-               iend   = ubound(vect3dPtr2dr4,2)
-               jstart = lbound(vect3dPtr2dr4,3)
-               jend   = ubound(vect3dPtr2dr4,3)
-!$omp parallel do default(shared) private(i,j)
-               do j=jstart, jend
-                 do i=istart, iend
-                   if (maskwrt(i,j)<1.0 .and. attTypeKind==ESMF_TYPEKIND_R4) vect3dPtr2dr4(:,i,j)=missing_value_r4
-                   if (maskwrt(i,j)<1.0 .and. attTypeKind==ESMF_TYPEKIND_R8) vect3dPtr2dr4(:,i,j)=missing_value_r8
-                 enddo
-               enddo
-             endif !mvispresent
-           endif
-         endif
-! For non-vector fields
-       else
-         ! Only work on ESMF_TYPEKIND_R4 fields for now
-         if ( typekind == ESMF_TYPEKIND_R4 ) then
-           ! 2-d fields
-           if(fieldDimCount == gridDimCount) then
-             call ESMF_FieldGet(fcstField(ifld),localDe=0, farrayPtr=var2dPtr2dr4, rc=rc)
-             ! Get the _FillValue from the field attribute if exists
-             call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                 name="_FillValue", typekind=attTypeKind, isPresent=mvispresent, rc=rc)
-             !write(msg,*) 'fieldName,attTypeKind,isPresent=',trim(fieldName),attTypeKind,mvispresent
-             !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-             if ( mvispresent ) then
-               if (attTypeKind==ESMF_TYPEKIND_R4) then
-                 call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                        name="_FillValue", value=missing_value_r4, isPresent=mvispresent, rc=rc)
-                 !write(msg,*) 'fieldName,_FillValue,isPresent=',trim(fieldName),missing_value_r4,mvispresent
-                 !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-               else if (attTypeKind==ESMF_TYPEKIND_R8) then
-                 call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                        name="_FillValue", value=missing_value_r8, isPresent=mvispresent, rc=rc)
-                 !write(msg,*) 'fieldName,_FillValue,isPresent=',trim(fieldName),missing_value_r8,mvispresent
-                 !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-               endif
-               istart = lbound(var2dPtr2dr4,1)
-               iend   = ubound(var2dPtr2dr4,1)
-               jstart = lbound(var2dPtr2dr4,2)
-               jend   = ubound(var2dPtr2dr4,2)
-!$omp parallel do default(shared) private(i,j)
-               do j=jstart, jend
-                 do i=istart, iend
-                   if (maskwrt(i,j)<1.0 .and. attTypeKind==ESMF_TYPEKIND_R4) var2dPtr2dr4(i,j)=missing_value_r4
-                   if (maskwrt(i,j)<1.0 .and. attTypeKind==ESMF_TYPEKIND_R8) var2dPtr2dr4(i,j)=missing_value_r8
-                 enddo
-               enddo
-             endif !mvispresent
-           ! 3-d fields
-           else if(fieldDimCount == gridDimCount+1) then
-             call ESMF_FieldGet(fcstField(ifld),localDe=0, farrayPtr=var3dPtr3dr4, rc=rc)
-             ! Get the _FillValue from the field attribute if exists
-             call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                 name="_FillValue", typekind=attTypeKind, isPresent=mvispresent, rc=rc)
-             !write(msg,*) 'fieldName,attTypeKind,isPresent=',trim(fieldName),attTypeKind,mvispresent
-             !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-             if ( mvispresent ) then
-               if (attTypeKind==ESMF_TYPEKIND_R4) then
-                 call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                        name="_FillValue", value=missing_value_r4, isPresent=mvispresent, rc=rc)
-                 !write(msg,*) 'fieldName,_FillValue,isPresent=',trim(fieldName),missing_value_r4,mvispresent
-                 !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-               else if (attTypeKind==ESMF_TYPEKIND_R8) then
-                 call ESMF_AttributeGet(fcstField(ifld), convention="NetCDF", purpose="FV3", &
-                        name="_FillValue", value=missing_value_r8, isPresent=mvispresent, rc=rc)
-                 !write(msg,*) 'fieldName,_FillValue,isPresent=',trim(fieldName),missing_value_r8,mvispresent
-                 !call ESMF_LogWrite("call mask field: "//trim(msg),ESMF_LOGMSG_INFO,rc=RC)
-               endif
-               istart = lbound(var3dPtr3dr4,1)
-               iend   = ubound(var3dPtr3dr4,1)
-               jstart = lbound(var3dPtr3dr4,2)
-               jend   = ubound(var3dPtr3dr4,2)
-               kstart = lbound(var3dPtr3dr4,3)
-               kend   = ubound(var3dPtr3dr4,3)
-!$omp parallel do default(shared) private(i,j,k)
-               do k=kstart,kend
-                 do j=jstart, jend
-                   do i=istart, iend
-                     if (maskwrt(i,j)<1.0 .and. attTypeKind==ESMF_TYPEKIND_R4) var3dPtr3dr4(i,j,k)=missing_value_r4
-                     if (maskwrt(i,j)<1.0 .and. attTypeKind==ESMF_TYPEKIND_R8) var3dPtr3dr4(i,j,k)=missing_value_r8
-                   enddo
-                 enddo
-               enddo
-             endif !mvispresent
-           endif
-         endif
-       endif
-     enddo
-!
-     deallocate(maskwrt)
-     deallocate(fcstField)
-     rc = 0
-
-   end subroutine mask_fields
-!
-!-----------------------------------------------------------------------
-!
-
   subroutine ESMFproto_FieldBundleWrite(fieldbundle, fileName, &
     convention, purpose, status, timeslice, state, comps, rc)
     type(ESMF_FieldBundle),     intent(in)              :: fieldbundle
@@ -4615,6 +4365,211 @@
 !&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
 !-----------------------------------------------------------------------
 !
+      subroutine reset_bundle_to_missing_value(file_bundle,rc)
+
+        type(ESMF_FieldBundle), intent(in)              :: file_bundle
+        integer,                intent(out),   optional :: rc
+
+        integer ifld,fieldCount
+        type(ESMF_Field),   allocatable  :: fcstField(:)
+
+        ! get field count
+        call ESMF_FieldBundleGet(file_bundle, fieldCount=fieldCount, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        if (fieldCount == 0) return
+
+        allocate(fcstField(fieldCount))
+        call ESMF_FieldBundleGet(file_bundle, fieldList=fcstField, itemorderflag=ESMF_ITEMORDER_ADDORDER, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        do ifld=1,fieldCount
+
+          call init_field_to_missing_value(fcstField(ifld), rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        enddo
+
+        deallocate(fcstField)
+
+        rc = 0
+
+      end subroutine reset_bundle_to_missing_value
+
+      subroutine init_field_to_missing_value(field, rc)
+
+        type(ESMF_Field), intent(inout)           :: field
+        integer,          intent(out),   optional :: rc
+
+        integer dimCount, rank
+        type(ESMF_TypeKind_Flag) typekind
+        character(len=ESMF_MAXSTR) fieldName
+        real(ESMF_KIND_R4), dimension(:,:),     pointer  :: ptr2d_r4
+        real(ESMF_KIND_R4), dimension(:,:,:),   pointer  :: ptr3d_r4
+        real(ESMF_KIND_R4), dimension(:,:,:,:), pointer  :: ptr4d_r4
+        real(ESMF_KIND_R8), dimension(:,:),     pointer  :: ptr2d_r8
+        real(ESMF_KIND_R8), dimension(:,:,:),   pointer  :: ptr3d_r8
+        real(ESMF_KIND_R8), dimension(:,:,:,:), pointer  :: ptr4d_r8
+
+        real(ESMF_KIND_R4) :: missing_value_r4=9.99e20
+        real(ESMF_KIND_R8) :: missing_value_r8=9.99e20
+
+        call ESMF_FieldGet(field, name=fieldName, typekind=typekind, dimCount=dimCount, rank=rank, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
+
+        ! Only work on ESMF_TYPEKIND_R4 fields for now
+        if (typekind == ESMF_TYPEKIND_R4) then
+          if (dimCount == 2) then
+            call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr2d_r4, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
+            ptr2d_r4 = missing_value_r4
+          else if (dimCount == 3) then
+            call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr3d_r4, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
+            ptr3d_r4 = missing_value_r4
+          else if (dimCount == 4) then
+            call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr4d_r4, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
+            ptr4d_r4 = missing_value_r4
+          else
+            write(0,*)' Unsupported dimCount = ', dimCount
+            stop
+          endif
+        else if (typekind == ESMF_TYPEKIND_R8) then
+          if (dimCount == 2) then
+            call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr2d_r8, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
+            ptr2d_r8 = missing_value_r8
+          else if (dimCount == 3) then
+            call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr3d_r8, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
+            ptr3d_r8 = missing_value_r8
+          else if (dimCount == 4) then
+            call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr4d_r8, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
+            ptr4d_r8 = missing_value_r8
+          else
+            write(0,*)' Unsupported dimCount = ', dimCount
+            stop
+          endif
+        else
+          write(0,*)' Unsupported typekind = ', typekind
+          stop
+        endif
+
+        rc = 0
+
+      end subroutine init_field_to_missing_value
+
+      subroutine generate_dst_field_mask(src_grid, dst_grid, dst_field, rc)
+
+        type(ESMF_Grid), intent(in)    :: src_grid, dst_grid
+        type(ESMF_Field), intent(inout):: dst_field
+        integer, intent(out)           :: rc
+
+        type(ESMF_Field)               :: src_field
+        real(ESMF_KIND_R4), pointer    :: ptr(:,:)
+        integer(ESMF_KIND_I4), pointer :: maskPtr(:,:)
+        integer(ESMF_KIND_I4), pointer :: ptr_dst_status(:,:)
+        type(ESMF_RouteHandle)         :: routehandle_mask
+        character(ESMF_MAXSTR)         :: itemName
+        integer                        :: localDeCount
+        integer                        :: ig,jg, istart,iend, jstart,jend
+        integer                        :: srcTermProcessing
+
+
+        src_field = ESMF_FieldCreate(src_grid, &
+                                     typekind=ESMF_TYPEKIND_R4, &
+                                     staggerloc=ESMF_STAGGERLOC_CENTER, &
+                                     rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_FieldGet(src_field, localDeCount=localDeCount, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        if (localDeCount > 0) then
+          call ESMF_FieldGet(src_field, farrayPtr=ptr, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          ptr = 1.0
+        end if
+
+
+        dst_field = ESMF_FieldCreate(dst_grid, &
+                                     typekind=ESMF_TYPEKIND_R4, &
+                                     staggerloc=ESMF_STAGGERLOC_CENTER, &
+                                     rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_FieldGet(dst_field, localDeCount=localDeCount, rc=rc);
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        if (localDeCount > 0) then
+          call ESMF_FieldGet(dst_field, farrayPtr=ptr, rc=rc);
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          ptr = 0.0
+        end if
+
+        srcTermProcessing = 0
+
+        call ESMF_FieldRegridStore(srcField=src_field, &
+                                   dstField=dst_field, &
+                                   regridmethod=ESMF_REGRIDMETHOD_BILINEAR, &
+                                   routehandle=routehandle_mask, &
+                                   unmappedaction=ESMF_UNMAPPEDACTION_IGNORE, &
+                                   srcTermProcessing=srcTermProcessing, &
+                                   rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_FieldRegrid(src_field, dst_field, &
+                              routehandle=routehandle_mask, &
+                              termorderflag=ESMF_TERMORDER_SRCSEQ, &
+                              zeroregion=ESMF_REGION_SELECT, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_RouteHandleDestroy(routehandle_mask, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_FieldDestroy(src_field, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        rc = 0
+      end subroutine generate_dst_field_mask
+
+      subroutine add_dst_mask(dst_grid, dst_field, dstOutsideMaskValue, rc)
+
+        type(ESMF_Grid), intent(inout) :: dst_grid
+        type(ESMF_Field), intent(in)   :: dst_field
+        integer, intent(in)            :: dstOutsideMaskValue
+        integer, intent(out)           :: rc
+
+        real(ESMF_KIND_R4), pointer    :: ptr(:,:)
+        integer(ESMF_KIND_I4), pointer :: maskPtr(:,:)
+        integer                        :: localDeCount
+
+
+        call ESMF_FieldGet(dst_field, localDeCount=localDeCount, rc=rc);
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        ! Set destination grid mask to dstOutsideMaskValue where dst_field is 0 which will be for all destination
+        ! points outside of source (forecast, computational) grid
+        if (localDeCount > 0) then
+          call ESMF_FieldGet(dst_field, farrayPtr=ptr, rc=rc);
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          call ESMF_GridGetItem(dst_grid, itemflag=ESMF_GRIDITEM_MASK,   &
+                                staggerloc=ESMF_STAGGERLOC_CENTER, farrayPtr=maskPtr, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          maskPtr = 0
+          where (ptr == 0.0)
+            maskPtr = dstOutsideMaskValue
+          endwhere
+        end if
+
+        rc = 0
+
+      end subroutine add_dst_mask
+
     end module  module_wrt_grid_comp
 !
 !-----------------------------------------------------------------------
