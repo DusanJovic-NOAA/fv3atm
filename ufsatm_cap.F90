@@ -43,6 +43,12 @@ module ufsatm_cap_mod
                                     cplprint_flag, first_kdt, quilting,      &
                                     quilting_restart
 #endif
+#ifdef MPASMODEL
+  use module_mpasmodel_config,only: output_fh, dt_atmos, calendar,           &
+                                    fcst_mpi_comm, cpl_grid_id,              &
+                                    cplprint_flag, first_kdt, quilting,      &
+                                    quilting_restart
+#endif
   use module_fv3_io_def,      only: num_pes_fcst,write_groups,               &
                                     num_files, filename_base,                &
                                     wrttasks_per_group, n_group,             &
@@ -265,7 +271,7 @@ module ufsatm_cap_mod
     call ESMF_VMGet(vm, petCount=petcount, localpet=mype, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 #endif
-#ifdef MPAS
+#if defined(MPAS) || defined(MPASMODEL)
     call ESMF_VMGet(vm=vm, localPet=mype, mpiCommunicator=fcst_mpi_comm%mpi_val, &
                     petCount=petcount, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return

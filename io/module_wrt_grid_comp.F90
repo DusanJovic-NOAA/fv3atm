@@ -47,7 +47,9 @@
                                      ideflate, zstandard_level, lflname_fulltime
      use module_write_netcdf, only : write_netcdf
      use module_write_restart_netcdf, only : write_restart_netcdf
+#ifndef MPASMODEL
      use physcons,            only : pi => con_pi
+#endif
 #ifdef INLINE_POST
      use post_fv3,            only : post_run_fv3
 #endif
@@ -65,6 +67,9 @@
 !-----------------------------------------------------------------------
 !
 !
+#ifdef MPASMODEL
+     real, parameter :: PI = 3.1415926
+#endif
      integer,save      :: lead_write_task                                !<-- Rank of the first write task in the write group
      integer,save      :: last_write_task                                !<-- Rank of the last write task in the write group
      integer,save      :: ntasks                                         !<-- # of write tasks in the current group

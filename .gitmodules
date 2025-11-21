@@ -18,3 +18,6 @@
   path = mpas/MPAS-Model
   url = https://github.com/ufs-community/MPAS-Model.git
   branch = feature/mpas-in-ufs
+[submodule "mpasmodel/MPAS-Model"]
+  path = mpasmodel/MPAS-Model
+  url = https://github.com/DusanJovic-NOAA/MPAS-Model
