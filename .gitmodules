@@ -21,3 +21,4 @@
 [submodule "mpasmodel/MPAS-Model"]
   path = mpasmodel/MPAS-Model
   url = https://github.com/DusanJovic-NOAA/MPAS-Model
+  branch = ufs_with_mpasmodel
