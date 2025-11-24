@@ -2,6 +2,10 @@
   if (rc /= ESMF_SUCCESS) write(0,'(A,A,I0,A,I0)') __FILE__,':',__LINE__, ' ESMF rc: ', rc; \
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+#define ASSERT(a) \
+  if ((a) .neqv. .true. ) write(0,'(A,A,I0,A)') __FILE__,':',__LINE__, ' assertion failed'; \
+  if ((a) .neqv. .true. ) stop 1
+
 ! ###########################################################################################
 !> \file module_fcst_grid_comp.F90
 !>
@@ -184,7 +188,16 @@ contains
     integer,intent(out) :: rc
 
     ! Locals
+    integer             :: ierr
+    integer             :: seconds
+    integer             :: fcst_seconds, fcst_days
     real(kind=8)        :: mpi_wtime, tbeg1
+
+    type (ESMF_Time) :: ufsCurrTime
+    type (MPAS_Time_Type) :: startTime, currTime, stepStopTime
+    type (MPAS_Clock_type), pointer :: mpas_clock
+    type (MPAS_TimeInterval_type) :: atmTimeStep
+    character(len=StrKIND) :: timeStamp
 
     ! Initialize ESMF error message.
     rc = ESMF_SUCCESS
@@ -192,7 +205,37 @@ contains
     ! Timing info (debug mode)
     tbeg1 = mpi_wtime()
 
+    call ESMF_ClockGet(clock, CurrTime=ufsCurrTime, rc=rc); ESMF_ERR(rc)
+
+    mpas_clock => domain % clock
+
+    currTime = mpas_get_clock_time(mpas_clock, MPAS_NOW, ierr=ierr)
+    call mpas_get_time(curr_time=currTime, dateTimeString=timeStamp, ierr=ierr)
+
+    ! Assert that the UFS and MPAS clocks are in sync
+    ASSERT (ufsCurrTime == currTime % t)
+
+    ! Set MPAS's clock stop dt_atmos seconds from current time
+    ! This will make MPAS run dt_atmos/config_dt steps, then return
+    call mpas_set_timeInterval(atmTimeStep, S=dt_atmos, ierr=ierr)
+    stepStopTime = currTime + atmTimeStep
+    call mpas_set_clock_time(mpas_clock, stepStopTime, MPAS_STOP_TIME, ierr=ierr)
+
     call mpas_run(domain)
+
+    ! The MPAS's clock has advanced in mpas_run, look at the MPAS's current time,
+    ! and compute number of seconds since the start time, to determine if
+    ! it's time for output
+    currTime = mpas_get_clock_time(mpas_clock, MPAS_NOW, ierr=ierr)
+    startTime = mpas_get_clock_time(mpas_clock, MPAS_START_TIME, ierr)
+    call mpas_get_timeInterval(currTime-startTime, DD=fcst_days, S=fcst_seconds, ierr=ierr)
+    call mpas_get_time(curr_time=currTime, dateTimeString=timeStamp, ierr=ierr)
+
+    seconds = (fcst_days*86400 + fcst_seconds)
+
+    if (ANY(nint(output_fh(:)*3600.0) == seconds)) then
+       if (mype == 0) write(*,*)'output at ', seconds/3600.0
+    end if
 
     ! Timing info (debug mode)
     if (mype == 0) write(*,'(A,I16,A,F16.6)')'PASS(fcstRUN phase 1), n_atmsteps = ', &

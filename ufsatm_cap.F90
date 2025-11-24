@@ -160,6 +160,7 @@ module ufsatm_cap_mod
     call NUOPC_CompSpecialize(gcomp, specLabel=label_Advance, &
                               specPhaseLabel="phase2", specRoutine=ModelAdvance_phase2, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#endif
 
     ! specializations to set ufsatm cap run clock (model clock)
     call ESMF_MethodRemove(gcomp, label=label_SetRunClock, rc=rc)
@@ -169,6 +170,7 @@ module ufsatm_cap_mod
                                      specRoutine=ModelSetRunClock, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+#ifdef FV3
     ! specializations required to support 'inline' run sequences
     call NUOPC_CompSpecialize(gcomp, specLabel=label_CheckImport, &
                               specPhaseLabel="phase1", specRoutine=ufsatm_checkimport, rc=rc)
@@ -1207,7 +1209,7 @@ module ufsatm_cap_mod
     endif
 !
 !-- set up output forecast time if output_fh is specified
-#ifdef FV3
+!#ifdef FV3
     if (noutput_fh > 0 ) then
 !--- use output_fh to sepcify output forecast time
       loutput_fh = .true.
@@ -1239,7 +1241,7 @@ module ufsatm_cap_mod
       endif ! end loutput_fh
     endif
     if(mype==0) print *,'output_fh=',output_fh(1:size(output_fh)),'lflname_fulltime=',lflname_fulltime
-#endif
+!#endif
     if ( quilting ) then
       do i=1, write_groups
         call ESMF_InfoGetFromHost(wrtState(i), info=info, rc=rc)
@@ -1395,10 +1397,10 @@ module ufsatm_cap_mod
 
     call ModelAdvance_phase1(gcomp, rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-#ifdef FV3
+!#ifdef FV3
     call ModelAdvance_phase2(gcomp, rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-#endif
+!#endif
     if (profile_memory) call ESMF_VMLogMemInfo("Leaving UFSATM ModelAdvance: ")
 
     timere = MPI_Wtime()
@@ -1661,7 +1663,7 @@ module ufsatm_cap_mod
   end subroutine ModelSetRunClock
 
 !-----------------------------------------------------------------------------
-
+#ifdef FV3
   subroutine ufsatm_checkimport(gcomp, rc)
 
 !***  Check the import state fields
@@ -1750,6 +1752,7 @@ module ufsatm_cap_mod
     endif
 
   end subroutine ufsatm_checkimport
+#endif
 
 !-----------------------------------------------------------------------------
 
