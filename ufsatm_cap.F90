@@ -677,7 +677,10 @@ module ufsatm_cap_mod
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
     call ESMF_InfoGetAlloc(info, key="is_moving", values=is_moving, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-
+#else
+    allocate(is_moving(1))
+    is_moving = .false.
+#endif
     needGridTransfer = any(is_moving)
 
     allocate(is_moving_fb(FBcount))
@@ -690,7 +693,6 @@ module ufsatm_cap_mod
     write(msgString,'(A,8L4)') trim(subname)//" is_moving = ", is_moving
     call ESMF_LogWrite(trim(msgString), ESMF_LOGMSG_INFO, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-#endif
 !
 !-----------------------------------------------------------------------
 !***  create and initialize Write component(s).
@@ -971,6 +973,7 @@ module ufsatm_cap_mod
                            ' needs_dst_mask: ', needs_dst_mask
           endif
 
+#ifdef FV3
           ! only on write group 1, RH's on groups > 1 are computed from RH on group 1
           if (needs_dst_mask .and. i==1) then
 
@@ -995,6 +998,7 @@ module ufsatm_cap_mod
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
           end if ! .not. is_moving_fb(j)
+#endif
 
           ! decide between Redist() and Regrid()
           if (is_moving_fb(j)) then

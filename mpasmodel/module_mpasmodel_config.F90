@@ -13,6 +13,16 @@ module module_mpasmodel_config
   type (core_type), pointer :: corelist => null()
   type (domain_type), pointer :: domain => null()
 
+  integer, pointer :: nCellsSolve      ! number of cells that a task solves
+  integer, pointer :: nEdgesSolve      ! number of edges that a task solves
+  integer, pointer :: nVerticesSolve   ! number of vertices (vorticity) that a task solves
+  integer, pointer :: nVertLevels      ! number of vertical layers (midpoints)
+
+  !> Global gridded data
+  integer :: nCellsGlobal     ! global number of cells/columns
+  integer :: nEdgesGlobal     ! global number of edges
+  integer :: nVerticesGlobal  ! global number of vertices
+
   !> MPI communicator for the forecast grid component
   type(MPI_Comm)           :: fcst_mpi_comm
 

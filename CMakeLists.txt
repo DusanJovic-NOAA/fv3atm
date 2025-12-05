@@ -68,7 +68,6 @@ endif()
 
 # Not used yet by MPAS in UFSATM, but needed by ufsatm_cap.F90 to work.
 list(APPEND coupling_srcs
-  cpl/module_block_data.F90
   cpl/module_cplfields.F90
   cpl/module_cap_cpl.F90
   cpl/module_cplscalars.F90)
@@ -170,6 +169,7 @@ if (FV3)
     fv3/module_fv3_config.F90
     fv3/module_fcst_grid_comp.F90
     fv3/stochastic_physics/stochastic_physics_wrapper.F90
+    cpl/module_block_data.F90
     ${coupling_srcs}
     ${fv3_io_srcs}
     ${io_srcs}
@@ -286,8 +286,10 @@ if (MPASMODEL)
     ufsatm_cap.F90
     mpasmodel/module_mpasmodel_config.F90
     mpasmodel/module_fcst_grid_comp.F90
+    mpasmodel/ufs_mpas_wgc_output.F90
     ${coupling_srcs}
     ${io_srcs}
+    io/module_mpas_write_history.F90
     )
   add_dependencies(${DYCORE_TARGET} mpas)
 
@@ -336,8 +338,7 @@ if (MPAS)
 endif()
 
 if (MPASMODEL)
-  target_link_libraries(${DYCORE_TARGET} PUBLIC mpas
-					 fms)
+  target_link_libraries(${DYCORE_TARGET} PUBLIC mpas)
 endif()
 
 # Always include EMC libraries in dycore install

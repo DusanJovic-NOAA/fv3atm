@@ -296,7 +296,9 @@ module module_cplfields
   ! Methods
   public queryImportFields, queryExportFields
   public cplFieldGet
+#ifdef FV3
   public realizeConnectedCplFields
+#endif
 
 !-----------------------------------------------------------------------------
   contains
@@ -457,7 +459,7 @@ module module_cplfields
 
   end subroutine cplFieldGet
 
-
+#ifdef FV3
   subroutine realizeConnectedCplFields(state, grid, &
                                        numLevels, numSoilLayers, numTracers, &
                                        fields_info, state_tag, fieldList, fill_value, rc)
@@ -580,7 +582,7 @@ module module_cplfields
     if (allocated(tracerUnits)) deallocate(tracerUnits)
 
   end subroutine realizeConnectedCplFields
-
+#endif
 !-----------------------------------------------------------------------------
 
   subroutine addFieldMetadata(field, key, values, rc)

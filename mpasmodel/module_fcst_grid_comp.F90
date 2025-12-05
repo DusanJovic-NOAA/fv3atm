@@ -21,6 +21,7 @@ module module_fcst_grid_comp
   use mpas_derived_types, only : core_type, domain_type
 
   use module_mpasmodel_config
+  use ufs_mpas_wgc_output
 
   implicit none
   private
@@ -33,6 +34,7 @@ module module_fcst_grid_comp
   integer :: date_init(6)
 
   integer :: mype = 0
+  type(ESMF_FieldBundle) :: history_field_bundle
 
   public SetServices
 
@@ -145,6 +147,61 @@ contains
     ! #######################################################################################
     call mpas_init(corelist, domain, external_comm=fcst_mpi_comm)
 
+    call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', mesh)
+    call mpas_pool_get_dimension(mesh, 'nCellsSolve',    nCellsSolve)
+    call mpas_pool_get_dimension(mesh, 'nVerticesSolve', nVerticesSolve)
+    call mpas_pool_get_dimension(mesh, 'nEdgesSolve',    nEdgesSolve)
+    call mpas_pool_get_dimension(mesh, 'nVertLevels',    nVertLevels)
+
+    call mpas_dmpar_sum_int(domain % dminfo, nVerticesSolve, nVerticesGlobal)
+    call mpas_dmpar_sum_int(domain % dminfo, nCellsSolve, nCellsGlobal)
+    call mpas_dmpar_sum_int(domain % dminfo, nEdgesSolve, nEdgesGlobal)
+
+    ! if (mype == 0) then
+    !    write(0,*)'nCellsSolve     = ', nCellsSolve
+    !    write(0,*)'nVerticesSolve  = ', nVerticesSolve
+    !    write(0,*)'nVertLevels     = ', nVertLevels
+    !    write(0,*)'nVerticesGlobal = ', nVerticesGlobal
+    !    write(0,*)'nCellsGlobal    = ', nCellsGlobal
+    !    write(0,*)'nEdgesGlobal    = ', nEdgesGlobal
+    ! end if
+
+    call ufs_mpas_create_history_bundle(history_field_bundle, rc=rc); ESMF_ERR(rc)
+    call ESMF_StateAdd(exportState, (/ history_field_bundle /), rc=rc); ESMF_ERR(rc)
+
+    ngrids = 1
+    allocate(is_moving(ngrids))
+    is_moving = .false.
+    call ESMF_InfoGetFromHost(exportState, info=info, rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="/NetCDF/FV3/ngrids", value=ngrids, rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="/NetCDF/FV3/top_parent_is_global", value=.false., rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="is_moving", values=is_moving, rc=rc); ESMF_ERR(rc)
+    deallocate(is_moving)
+
+! Add time Attribute to the exportState
+    write(dateSY,'(I4.4)')date_init(1)
+    write(dateSM,'(I2.2)')date_init(2)
+    write(dateSD,'(I2.2)')date_init(3)
+    write(dateSH,'(I2.2)')date_init(4)
+    write(dateSN,'(I2.2)')date_init(5)
+    write(dateSS,'(I2.2)')date_init(6)
+
+    dateS="hours since "//dateSY//'-'//dateSM//'-'//dateSD//' '//dateSH//':'// dateSN//":"//dateSS
+    if (mype == 0) write(*,*)'dateS=',trim(dateS)
+
+    call ESMF_InfoGetFromHost(exportState, info=info, rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="/NetCDF/FV3/time", value=real(0,ESMF_KIND_R8), rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="/NetCDF/FV3/time:long_name", value="time", rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="/NetCDF/FV3/time:cartesian_axis", value="T", rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="/NetCDF/FV3/time:units", value=trim(dateS), rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="/NetCDF/FV3/time:calendar_type", value=trim(calendar), rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="/NetCDF/FV3/time:calendar", value=trim(calendar), rc=rc); ESMF_ERR(rc)
+
+! Add time_iso Attribute to the exportState
+    call ESMF_InfoSet(info, key="/NetCDF/FV3/time_iso", value="yyyy-mm-ddThh:mm:ssZ", rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="/NetCDF/FV3/time_iso:long_name", value="valid time", rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="/NetCDF/FV3/time_iso:description", value="ISO 8601 Date String", rc=rc); ESMF_ERR(rc)
+
     ! Timing info (debug mode)
     if (mype == 0) write(*,*)'PASS(fcst_initialize): Time is ', mpi_wtime() - tbeg1
 
@@ -198,6 +255,7 @@ contains
     type (MPAS_Clock_type), pointer :: mpas_clock
     type (MPAS_TimeInterval_type) :: atmTimeStep
     character(len=StrKIND) :: timeStamp
+    character(len=64) :: fname
 
     ! Initialize ESMF error message.
     rc = ESMF_SUCCESS
@@ -234,7 +292,7 @@ contains
     seconds = (fcst_days*86400 + fcst_seconds)
 
     if (ANY(nint(output_fh(:)*3600.0) == seconds)) then
-       if (mype == 0) write(*,*)'output at ', seconds/3600.0
+       call ufs_mpas_update_history_bundle(history_field_bundle, rc=rc); ESMF_ERR(rc)
     end if
 
     ! Timing info (debug mode)
