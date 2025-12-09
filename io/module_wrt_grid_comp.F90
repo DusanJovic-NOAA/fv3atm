@@ -2496,10 +2496,16 @@
                      trim(output_grid(grid_id)) == 'rotated_latlon'  .or.        &
                      trim(output_grid(grid_id)) == 'rotated_latlon_moving' .or.  &
                      trim(output_grid(grid_id)) == 'lambert_conformal') then
-
+#ifdef FV3
               call write_netcdf(wrt_int_state%wrtFB(nbdl), trim(filename), &
                                 use_parallel_netcdf, wrt_mpi_comm, wrt_int_state%mype, &
                                 grid_id, rc=rc)
+#endif
+#ifdef MPASMODEL
+              call mpas_write_history(wrt_int_state%wrtFB(nbdl), trim(filename), &
+                               use_parallel_netcdf, wrt_mpi_comm, wrt_int_state%mype, &
+                               grid_id, rc=rc)
+#endif
 
             else ! unknown output_grid
 
