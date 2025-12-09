@@ -53,7 +53,7 @@ endif()
 add_definitions(-DMPAS_EXTERNAL_ESMF_LIB -DMPAS_NO_ESMF_INIT)
 set(DO_PHYSICS ON)
 set(FETCH_MPAS_DATA OFF)
-add_library(${PROJECT_NAME}::external::esmf ALIAS esmf)
+add_library(${PROJECT_NAME}::external::esmf ALIAS ESMF::ESMF)
 
 # MPAS Namelist
 add_subdirectory(MPAS-Model/src/tools/input_gen) # Targets: namelist_gen, streams_gen
