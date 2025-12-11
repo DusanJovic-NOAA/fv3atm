@@ -258,27 +258,7 @@ if (MPASMODEL)
   add_definitions(-DMPASMODEL)
   set(DYCORE_TARGET ${DYCORE_TARGET_MPASMODEL})
 
-  # Include MPAS Cmake tools.
-  include(${CMAKE_CURRENT_SOURCE_DIR}/mpasmodel/MPAS-Model/cmake/Functions/MPAS_Functions.cmake)
-
-  # Set any pre-processor directive needed in MPAS dycore.
-  get_mpas_version(MPAS_VERSION)
-  set(MPAS_ALL_CORES atmosphere)
-  set(MPAS_CORES atmosphere CACHE STRING "MPAS cores to build. Options: ${MPAS_ALL_CORES}")
-  if(MPAS_CORES MATCHES " ") #Convert strings separated with spaces to CMake list separated with ';'
-    string(REPLACE " " ";" MPAS_CORES ${MPAS_CORES})
-    set(MPAS_CORES ${MPAS_CORES} CACHE STRING "MPAS cores to build. Options: ${MPAS_ALL_CORES}" FORCE)
-  endif()
-  set(MPAS_USE_PIO TRUE)
-  add_definitions(-DMPAS_USE_MPI_F08)
-  add_definitions(-DMPAS_PIO_SUPPORT)
-  add_definitions(-DSINGLE_PRECISION)
-
-  # Source files for MPAS dynamical core drivers.
-  set(MPAS_MAIN_SRC      ${CMAKE_CURRENT_SOURCE_DIR}/mpasmodel/MPAS-Model/src/driver/mpas.F)
-  set(MPAS_SUBDRIVER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/mpasmodel/MPAS-Model/src/driver/mpas_subdriver.F)
-
-  # MPAS dynamical core
+  # MPAS model
   add_subdirectory(mpasmodel)
 
   # MPAS drivers and dependencies
@@ -292,20 +272,6 @@ if (MPASMODEL)
     io/module_mpas_write_history.F90
     )
   add_dependencies(${DYCORE_TARGET} mpas)
-
-  if(NOT MPAS_GIT_VERSION)
-    find_package(Git QUIET)
-    if(GIT_FOUND)
-      execute_process(COMMAND ${GIT_EXECUTABLE} describe --dirty
-                      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/mpasmodel/MPAS-Model"
-		      OUTPUT_VARIABLE _mpas_git_version
-		      ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
-    else()
-      set(_mpas_git_version "Unknown")
-    endif()
-    set(MPAS_GIT_VERSION ${_mpas_git_version} CACHE STRING "MPAS-Model git version")
-    message(STATUS "Setting MPAS_GIT_VERSION ${_mpas_git_version}")
-  endif()
 else()
   remove_definitions(-DMPASMODEL)
 endif()
