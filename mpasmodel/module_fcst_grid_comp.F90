@@ -34,7 +34,20 @@ module module_fcst_grid_comp
   integer :: date_init(6)
 
   integer :: mype = 0
-  type(ESMF_FieldBundle) :: history_field_bundle
+
+  type(ESMF_FieldBundle) :: history_bilinear_field_bundle
+  type(ESMF_FieldBundle) :: history_nearest_dtos_field_bundle
+  type(ESMF_FieldBundle) :: history_nearest_stod_field_bundle
+  type(ESMF_FieldBundle) :: history_patch_field_bundle
+  integer, parameter :: max_num_history_vars = 1000
+  character(len=64) :: history_bilinear_vars(max_num_history_vars)
+  character(len=64) :: history_nearest_dtos_vars(max_num_history_vars)
+  character(len=64) :: history_nearest_stod_vars(max_num_history_vars)
+  character(len=64) :: history_patch_vars(max_num_history_vars)
+  integer :: num_history_bilinear_vars = 0
+  integer :: num_history_nearest_dtos_vars = 0
+  integer :: num_history_nearest_stod_vars = 0
+  integer :: num_history_patch_vars = 0
 
   public SetServices
 
@@ -166,8 +179,27 @@ contains
     !    write(0,*)'nEdgesGlobal    = ', nEdgesGlobal
     ! end if
 
-    call ufs_mpas_create_history_bundle(history_field_bundle, rc=rc); ESMF_ERR(rc)
-    call ESMF_StateAdd(exportState, (/ history_field_bundle /), rc=rc); ESMF_ERR(rc)
+    call parse_history_list_vars(rc=rc); ESMF_ERR(rc)
+
+    if (num_history_bilinear_vars > 0) then
+      call ufs_mpas_create_history_bundle(history_bilinear_field_bundle, history_bilinear_vars(1:num_history_bilinear_vars), 'bilinear', rc=rc); ESMF_ERR(rc)
+      call ESMF_StateAdd(exportState, (/ history_bilinear_field_bundle /), rc=rc); ESMF_ERR(rc)
+    end if
+
+    if (num_history_nearest_dtos_vars > 0) then
+      call ufs_mpas_create_history_bundle(history_nearest_dtos_field_bundle, history_nearest_dtos_vars(1:num_history_nearest_dtos_vars), 'nearest_dtos', rc=rc); ESMF_ERR(rc)
+      call ESMF_StateAdd(exportState, (/ history_nearest_dtos_field_bundle /), rc=rc); ESMF_ERR(rc)
+    end if
+
+    if (num_history_nearest_stod_vars > 0) then
+      call ufs_mpas_create_history_bundle(history_nearest_stod_field_bundle, history_nearest_stod_vars(1:num_history_nearest_stod_vars), 'nearest_stod', rc=rc); ESMF_ERR(rc)
+      call ESMF_StateAdd(exportState, (/ history_nearest_stod_field_bundle /), rc=rc); ESMF_ERR(rc)
+    end if
+
+    if (num_history_patch_vars > 0) then
+      call ufs_mpas_create_history_bundle(history_patch_field_bundle, history_patch_vars(1:num_history_patch_vars), 'patch', rc=rc); ESMF_ERR(rc)
+      call ESMF_StateAdd(exportState, (/ history_patch_field_bundle /), rc=rc); ESMF_ERR(rc)
+    end if
 
     ngrids = 1
     allocate(is_moving(ngrids))
@@ -292,7 +324,18 @@ contains
     seconds = (fcst_days*86400 + fcst_seconds)
 
     if (ANY(nint(output_fh(:)*3600.0) == seconds)) then
-       call ufs_mpas_update_history_bundle(history_field_bundle, rc=rc); ESMF_ERR(rc)
+       if (num_history_bilinear_vars > 0) then
+          call ufs_mpas_update_history_bundle(history_bilinear_field_bundle, history_bilinear_vars(1:num_history_bilinear_vars), rc=rc); ESMF_ERR(rc)
+       end if
+       if (num_history_nearest_dtos_vars > 0) then
+          call ufs_mpas_update_history_bundle(history_nearest_dtos_field_bundle, history_nearest_dtos_vars(1:num_history_nearest_dtos_vars), rc=rc); ESMF_ERR(rc)
+       end if
+       if (num_history_nearest_stod_vars > 0) then
+          call ufs_mpas_update_history_bundle(history_nearest_stod_field_bundle, history_nearest_stod_vars(1:num_history_nearest_stod_vars), rc=rc); ESMF_ERR(rc)
+       end if
+       if (num_history_patch_vars > 0) then
+          call ufs_mpas_update_history_bundle(history_patch_field_bundle, history_patch_vars(1:num_history_patch_vars), rc=rc); ESMF_ERR(rc)
+       end if
     end if
 
     ! Timing info (debug mode)
@@ -348,4 +391,74 @@ contains
     if (mype == 0) write(*,*)'PASS(fcst_finalize): total is ', mpi_wtime() - tbeg1
 
   end subroutine fcst_finalize
+
+  subroutine parse_history_list_vars(rc)
+
+   integer, intent(out) :: rc
+
+   integer :: file_unit, i, io_status
+   character(len=256) :: filename
+   logical :: file_too_long
+   character(len=64) :: var_name, var_interp_method
+
+   rc = 0
+
+   filename = 'ufs_mpasmodel_wgc_history_list'
+   open(newunit=file_unit, file=trim(filename), status='old', action='read', iostat=io_status)
+   if (io_status /= 0) then
+       write(0, '(A,A,A)') "Error: Cannot open file '", trim(filename), "'. Check if the file exists."
+       rc = 1
+       return
+   end if
+
+   file_too_long = .false.
+
+   do i = 1, max_num_history_vars + 1  ! Add 1 to explicitly detect overflow
+
+      read(file_unit, *, iostat=io_status) var_name, var_interp_method
+
+      if (io_status < 0) then
+          exit  ! Normal end of file
+      else if (io_status > 0) then
+          write(0, '(A,I0,A)') "Error reading line ", i, " in file "//trim(filename)
+          rc = 1
+          return
+      end if
+
+      if (i > max_num_history_vars) then
+          file_too_long = .true.
+          exit
+      end if
+
+      ! Skip other interpolation methods
+      if (trim(var_interp_method) == 'bilinear') then
+          num_history_bilinear_vars = num_history_bilinear_vars + 1
+          history_bilinear_vars(num_history_bilinear_vars) = trim(var_name)
+      else if (trim(var_interp_method) == 'nearest_dtos') then
+          num_history_nearest_dtos_vars = num_history_nearest_dtos_vars + 1
+          history_nearest_dtos_vars(num_history_nearest_dtos_vars) = trim(var_name)
+      else if (trim(var_interp_method) == 'nearest_stod') then
+          num_history_nearest_stod_vars = num_history_nearest_stod_vars + 1
+          history_nearest_stod_vars(num_history_nearest_stod_vars) = trim(var_name)
+      else if (trim(var_interp_method) == 'patch') then
+          num_history_patch_vars = num_history_patch_vars + 1
+          history_patch_vars(num_history_patch_vars) = trim(var_name)
+      else
+          write(0, '(A,I0,A)') "Error on line ", i, " in file "//trim(filename)//", unknown interp_method"
+          rc = 1
+          return
+      end if
+
+   end do
+
+   if (file_too_long) then
+       write(0, '(A)') "Error file "//trim(filename)//" too long. Increase max_num_history_vars"
+       rc = 1
+       return
+   endif
+
+   close(file_unit)
+
+  end subroutine parse_history_list_vars
+
 end module  module_fcst_grid_comp

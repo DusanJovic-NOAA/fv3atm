@@ -94,7 +94,6 @@ contains
     integer, dimension(:), allocatable   :: ungriddedLBound, ungriddedUBound
     integer, dimension(:), allocatable   :: start_idx
 
-    ! type(ESMF_Field), allocatable        :: fcstField(:)
     type(ESMF_TypeKind_Flag)             :: typekind
     type(ESMF_TypeKind_Flag)             :: attTypeKind
     type(ESMF_Grid)                      :: wrtgrid
@@ -141,13 +140,13 @@ contains
     integer :: num_ungridded_dims
     logical :: isPresent
 
-    character(64), allocatable :: dimension_names(:)
     character(64), allocatable :: variable_names(:)
     integer :: var_count
     character(64), allocatable :: var_dim_names(:)
     integer :: var_dim_names_count
     character(256), allocatable :: global_att_names(:)
-    character(len=ESMF_MAXSTR) :: varName
+    character(len=64) :: dimName
+    character(len=64) :: varName
 
     integer :: dimSize, numAtt, itemCount
 
@@ -208,8 +207,8 @@ contains
     if (ierr /= 0) call ESMF_Finalize(endflag=ESMF_END_ABORT)
 
     call ESMF_InfoGetFromHost(wrtfb, info=bundle_info, rc=rc); ESMF_ERR(rc)
-    ! call ESMF_ArrayBundlePrint(wrtfb, rc=rc); ESMF_ERR(rc)
-    call ESMF_InfoPrint(bundle_info, rc=rc); ESMF_ERR(rc)
+    ! call ESMF_FieldBundlePrint(wrtfb, rc=rc); ESMF_ERR(rc)
+    ! call ESMF_InfoPrint(bundle_info, rc=rc); ESMF_ERR(rc)
 
     call ESMF_AttributeGet(wrtfb, convention="NetCDF", purpose="FV3", &
                            name='grid', value=output_grid_name, rc=rc); ESMF_ERR_RETURN(rc)
@@ -241,17 +240,18 @@ contains
     deallocate(maxIndexPTile)
 
     ! Gather information about ungridded dimensions from the bundle Info
-    call ESMF_InfoGetAlloc(bundle_info, key='/NetCDF/MPAS/dimension_names', values=dimension_names, itemCount=itemCount, rc=rc); ESMF_ERR(rc)
-    call ESMF_InfoGet(bundle_info, key='/NetCDF/MPAS/dimensions', size=num_ungridded_dims, rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoGet(bundle_info, key='/NetCDF/MPAS/ungridded_dimensions', isPresent=isPresent, size=num_ungridded_dims, rc=rc); ESMF_ERR(rc)
 
+    if (.not. isPresent) num_ungridded_dims = 0
     allocate(dim_info_arr(2+num_ungridded_dims))
     dim_info_arr(1) % dimName = 'grid_xt'
     dim_info_arr(1) % dimSize = im
     dim_info_arr(2) % dimName = 'grid_yt'
     dim_info_arr(2) % dimSize = jm
     do i = 1, num_ungridded_dims
-       call ESMF_InfoGet(bundle_info, key='/NetCDF/MPAS/dimensions/'//trim(dimension_names(i)), value=dimSize, rc=rc); ESMF_ERR(rc)
-       dim_info_arr(2+i) % dimName = trim(dimension_names(i))
+       call ESMF_InfoGet(bundle_info, key='/NetCDF/MPAS/ungridded_dimensions', idx=i, ikey=dimName, rc=rc); ESMF_ERR(rc)
+       call ESMF_InfoGet(bundle_info, key='/NetCDF/MPAS/ungridded_dimensions/'//trim(dimName), value=dimSize, rc=rc); ESMF_ERR(rc)
+       dim_info_arr(2+i) % dimName = trim(dimName)
        dim_info_arr(2+i) % dimSize = dimSIze
     end do
 
@@ -347,18 +347,17 @@ contains
     end if ! do_io
 
     ! Gather information about variables
-    call ESMF_InfoGetAlloc(bundle_info, key='/NetCDF/MPAS/variable_names', values=variable_names, itemCount=var_count, rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoGet(bundle_info, key='/NetCDF/MPAS/variables', size=var_count, rc=rc); ESMF_ERR(rc)
 
     call ESMF_FieldBundleGet(wrtfb, fieldCount=fieldCount, rc=rc); ESMF_ERR_RETURN(rc)
     ASSERT(var_count == fieldCount)
 
-    ! allocate(fcstField(fieldCount))
-    ! call ESMF_FieldBundleGet(wrtfb, fieldList=fcstField, rc=rc); ESMF_ERR_RETURN(rc)
-
     allocate(var_info_arr(var_count))
+    allocate(variable_names(var_count))
     do i = 1, var_count
 
-       varName = trim(variable_names(i))
+       call ESMF_InfoGet(bundle_info, key='/NetCDF/MPAS/variables', idx=i, ikey=varName, rc=rc); ESMF_ERR(rc)
+       variable_names(i) = varName
 
        call ESMF_FieldBundleGet(wrtfb, varName, field=field, fieldCount=fieldCount, isPresent=isPresent, rc=rc); ESMF_ERR(rc)
        ASSERT (isPresent)
@@ -403,7 +402,6 @@ contains
           allocate(ungriddedUBound(num_ungridded_dims))
           call ESMF_FieldGet(field, ungriddedLBound=ungriddedLBound, ungriddedUBound=ungriddedUBound, rc=rc); ESMF_ERR_RETURN(rc)
           do n = 1, num_ungridded_dims
-             write(0,*) trim(varName), ungriddedUBound(n) - ungriddedLBound(n) + 1, var_info_arr(i) % dimSizes(2 + n)
              ASSERT( (ungriddedUBound(n) - ungriddedLBound(n) + 1) == var_info_arr(i) % dimSizes(2 + n) )
           end do
           deallocate(ungriddedLBound)
@@ -644,9 +642,6 @@ contains
 
        call ESMF_FieldBundleGet(wrtfb, varName, field=field, rc=rc); ESMF_ERR(rc)
        call ESMF_FieldGet(field,rank=rank,typekind=typekind, rc=rc); ESMF_ERR_RETURN(rc)
-       ! if(trim(varName) == 'ozmixm') then
-       !    call ESMF_FieldPrint(field, rc=rc); ESMF_ERR(rc)
-       ! endif
 
        if (rank == 2) then
 

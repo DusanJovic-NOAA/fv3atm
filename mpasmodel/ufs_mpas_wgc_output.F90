@@ -7,9 +7,9 @@
   if ((a) .neqv. .true. ) stop 1
 
 module ufs_mpas_wgc_output
+
   use mpi_f08
   use esmf
-  use pio, only : PIO_int, PIO_real, PIO_double, PIO_char
 
   use mpas_derived_types, only : domain_type
   use mpas_kind_types,    only : StrKIND, rkind
@@ -26,58 +26,36 @@ module ufs_mpas_wgc_output
   public :: ufs_mpas_create_history_bundle
   public :: ufs_mpas_update_history_bundle
 
-  type :: out_var_info
-    character(64) :: var_name = ''
-  end type
-
-  type(out_var_info), parameter :: history_vars(*) = [ &
-       out_var_info('latCell'                ), &
-       out_var_info('lonCell'                ), &
-       out_var_info('indexToCellID'          ), &
-       out_var_info('precipw'                ), &
-       out_var_info('vort_pv'                ), &
-       out_var_info('surface_pressure'       ), &
-       out_var_info('rho_zz'                 ), &
-       out_var_info('o3clim'                 ), &
-       out_var_info('o3vmr'                  ), &
-       out_var_info('theta_m'                ), &
-       out_var_info('theta'                  ), &
-       out_var_info('iLev_DT'                ), &
-       out_var_info('uReconstructZonal'      ), &
-       out_var_info('uReconstructMeridional' ), &
-       out_var_info('u'                      ), &
-       out_var_info('w'                      ), &
-       out_var_info('tslb'                   ), &
-       out_var_info('zgrid'                  ), &
-       out_var_info('scalars'                ), &
-       out_var_info('relhum_925hPa'          )  &
-  ]
-
-  integer, parameter :: num_history_vars = size(history_vars)
-
 contains
 
- subroutine ufs_mpas_create_history_bundle(output_bundle, rc)
+ subroutine ufs_mpas_create_history_bundle(output_bundle, output_vars, interp_method, rc)
 
    type(ESMF_FieldBundle), intent(out) :: output_bundle
+   character(len=*), intent(in)        :: output_vars(:)
+   character(len=*), intent(in)        :: interp_method
    integer, intent(out)                :: rc
 
+   type(ESMF_Info) :: bundle_info
    character(*), parameter :: subname = 'ufs_mpas_create_history_bundle'
 
-   call ufs_mpas_create_output_bundle(output_bundle, 'atm_bilinear', history_vars, rc); ESMF_ERR(rc)
-   ! call ufs_mpas_create_output_bundle(output_bundle, 'atm_nearest_stod', history_vars, rc); ESMF_ERR(rc)
+   call ufs_mpas_create_output_bundle(output_bundle, 'atm_'//trim(interp_method), output_vars, rc); ESMF_ERR(rc)
+
+   call ESMF_InfoGetFromHost(output_bundle, info=bundle_info, rc=rc); ESMF_ERR(rc)
+   ! call ESMF_FieldBundlePrint(output_bundle, rc=rc); ESMF_ERR(rc)
+   ! write(*,*)'bundle '//trim(interp_method)
+   ! call ESMF_InfoPrint(bundle_info, rc=rc); ESMF_ERR(rc)
 
  end subroutine ufs_mpas_create_history_bundle
 
- subroutine ufs_mpas_update_history_bundle(output_bundle, rc)
+ subroutine ufs_mpas_update_history_bundle(output_bundle, output_vars, rc)
 
    type(ESMF_FieldBundle), intent(inout) :: output_bundle
+   character(len=*), intent(in)          :: output_vars(:)
    integer, intent(out)                  :: rc
 
    character(*), parameter :: subname = 'ufs_mpas_update_history_bundle'
 
-   call ufs_mpas_update_output_bundle(output_bundle, 'atm_bilinear', history_vars, rc); ESMF_ERR(rc)
-   ! call ufs_mpas_update_output_bundle(output_bundle, 'atm_nearest_stod', history_vars, rc); ESMF_ERR(rc)
+   call ufs_mpas_update_output_bundle(output_bundle, output_vars, rc); ESMF_ERR(rc)
 
  end subroutine ufs_mpas_update_history_bundle
 
@@ -93,7 +71,7 @@ contains
 
    type(ESMF_FieldBundle), intent(out) :: output_bundle
    character(len=*), intent(in)        :: bundle_name
-   type(out_var_info), intent(in)      :: output_vars(:)
+   character(len=*), intent(in)        :: output_vars(:)
    integer, intent(out)                :: rc
 
    character(*), parameter :: subname = 'ufs_mpas_create_output_bundle'
@@ -131,15 +109,11 @@ contains
    type (att_lists_type), dimension(:), pointer :: attLists => null()
    character (len=StrKIND), dimension(5) :: dimNames
    logical :: isVarArray
-   ! logical :: is_unique
-   character(len=64), allocatable :: dimension_names(:)
    integer :: total_unique, nDims, dimSize
-   ! integer, pointer :: dimSize_ptr
-   character(len=64) :: variable_names(3000)
-   integer :: numVars
-
 
    rc = 0
+
+   ASSERT (size(output_vars) > 0)
 
    frestart(:) = -1
 
@@ -158,11 +132,8 @@ contains
 
    allocate(dim_info_arr(0))
 
-   variable_names = ''
-   numVars = 0
-
    do n = 1, size(output_vars)
-      field_name = trim(adjustl(output_vars(n)%var_name))
+      field_name = trim(adjustl(output_vars(n)))
 
       call mpas_log_write('Inquiring field information for "' // trim(adjustl(field_name)) // '"')
 
@@ -188,7 +159,7 @@ contains
             dimNames(1:nDims) = field_1d_integer % dimNames
             block => field_1d_integer % block
 
-            field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_I4, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)%var_name), rc=rc); ESMF_ERR(rc)
+            field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_I4, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
             call ESMF_FieldGet(field, farrayPtr=ptr_i4_d1, rc=rc); ESMF_ERR(rc)
             ptr_i4_d1 = field_1d_integer%array(1:nCellsSolve)
 
@@ -202,7 +173,7 @@ contains
             block => field_2d_integer % block
 
             field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_I4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(field_2d_integer%array,dim=1)], &
-                                     meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)%var_name), rc=rc); ESMF_ERR(rc)
+                                     meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
             call ESMF_FieldGet(field, farrayPtr=ptr_i4_d2, rc=rc); ESMF_ERR(rc)
             ptr_i4_d2 = field_2d_integer%array(:,1:nCellsSolve)
 
@@ -222,7 +193,7 @@ contains
             dimNames(1:nDims) = field_1d_real % dimNames
             block => field_1d_real % block
 
-            field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)%var_name), rc=rc); ESMF_ERR(rc)
+            field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
             call ESMF_FieldGet(field, farrayPtr=ptr_r4_d1, rc=rc); ESMF_ERR(rc)
             ptr_r4_d1 = field_1d_real%array(1:nCellsSolve)
 
@@ -238,7 +209,7 @@ contains
             block => field_2d_real % block
 
             field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(field_2d_real%array,dim=1)], &
-                                     meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)%var_name), rc=rc); ESMF_ERR(rc)
+                                     meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
             call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
             ptr_r4_d2 = field_2d_real%array(:,1:nCellsSolve)
 
@@ -269,88 +240,17 @@ contains
                   ! call ESMF_InfoSet(info, key="/NetCDF/FV3/missing_value", value=field_2d_real % missingValue, rc=rc); ESMF_ERR(rc)
                   call ESMF_InfoSet(field_info, key="/NetCDF/FV3/missing_value", value=9.99e20, rc=rc); ESMF_ERR(rc)
 
-#if 0
-                 ! FIXME --------------------------------------------------------------------------------------------
-                 call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value="atm", rc=rc); ESMF_ERR(rc)
+                  call add_field_to_bundle(field_3d_real % constituentNames(k), attLists(k) % attList)
 
-                 do i = 1, nDims
-                   call mpas_pool_get_dimension(block % dimensions, trim(dimNames(i)), dimSize_ptr)
-
-                   if (associated(dimSize_ptr)) then
-                       dimSize = dimSize_ptr
-                   else
-                       dimSize = -1
-                   end if
-
-                   if (i == nDims) then ! last dimension should be one of the decomposed nCells, nEdges, nVertices
-                       if (trim(dimNames(i)) == 'nCells' .or. trim(dimNames(i)) == 'nEdges' .or. trim(dimNames(i)) == 'nVertices') then
-                           cycle
-                       else
-                           call mpas_log_write(subname//' Last dimension is not a decomposed dimension', MPAS_LOG_CRIT)
-                       end if
-                   end if
-
-                   if (dimSize >= 0) then
-                       is_unique = .true.
-                       do j = 1, size(dim_info_arr)
-                           if (trim(dimNames(i)) == trim(dim_info_arr(j) % dimName)) then
-                               if (dimSize /= dim_info_arr(j) % dimSize) then
-                                  write(0,*)'conflictiing dimSize for ', trim(field_3d_real % constituentNames(k)), ' dimension ', trim(dimNames(i)), ' ', dimSize, dim_info_arr(j) % dimSize
-                                  stop 1
-                               end if
-                               is_unique = .false.
-                               exit
-                           end if
-                       end do
-                       ! If unique, append to collection
-                       if (is_unique) then
-                           total_unique = size(dim_info_arr)
-                           call resize_dim_info_array(dim_info_arr, total_unique + 1)
-                           dim_info_arr(total_unique + 1) % dimName = trim(dimNames(i))
-                           dim_info_arr(total_unique + 1) % dimSize = dimSize
-                       end if
-                   end if
-
-                 end do
-
-                 call ESMF_InfoSet(bundle_info, key='/NetCDF/MPAS/variables/'//trim(field_3d_real % constituentNames(k)), values=dimNames(1:nDims-1), rc=rc); ESMF_ERR(rc) ! last nDims is distributed dimension
-                 numVars = numVars + 1
-                 variable_names(numVars) = trim(field_3d_real % constituentNames(k))
-
-                 ! do i = 1, size(attLists(k))
-                    att_cursor => attLists(k) % attList
-                    do while (associated(att_cursor))
-                       if (att_cursor % attType == MPAS_ATT_INT) then
-                          call ESMF_InfoSet(field_info, key="/NetCDF/FV3/"//trim(att_cursor % attName), value=att_cursor % attValueInt, rc=rc); ESMF_ERR(rc)
-                       else if (att_cursor % attType == MPAS_ATT_REAL) then
-                          call ESMF_InfoSet(field_info, key="/NetCDF/FV3/"//trim(att_cursor % attName), value=att_cursor % attValueReal, rc=rc); ESMF_ERR(rc)
-                       else if (att_cursor % attType == MPAS_ATT_TEXT) then
-                          call ESMF_InfoSet(field_info, key="/NetCDF/FV3/"//trim(att_cursor % attName), value=trim(att_cursor % attValueText), rc=rc); ESMF_ERR(rc)
-                       else
-                          ! write(0,*) i, '"'//trim(att_cursor % attName)//'" unknown type ', att_cursor % attType
-                       end if
-                       att_cursor => att_cursor % next
-                    end do
-                 ! end do
-
-                 nullify(att_cursor)
-                 ! nullify(attLists)
-
-                 call ESMF_FieldBundleAdd(output_bundle,(/field/), rc=rc); ESMF_ERR(rc)
-                 ! FIXME --------------------------------------------------------------------------------------------------
-#else
-                 call add_field_to_bundle(field_3d_real % constituentNames(k), attLists(k) % attList)
-#endif
                end do ! k = 1, size(field_3d_real % constituentNames)
 
             else
 
                dimNames(1:nDims) = field_3d_real % dimNames
                field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/3/), ungriddedLBound=[1,1], ungriddedUBound=[size(field_3d_real%array,dim=1), size(field_3d_real%array,dim=2)], &
-                                        meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)%var_name), rc=rc); ESMF_ERR(rc)
+                                        meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
                call ESMF_FieldGet(field, farrayPtr=ptr_r4_d3, rc=rc); ESMF_ERR(rc)
                ptr_r4_d3 = field_3d_real%array(:,:,1:nCellsSolve)
-               write(0,*)trim(field_name), ' shape ', shape(ptr_r4_d3), shape(field_3d_real%array(:,:,1:nCellsSolve))
 
                call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
                ! call ESMF_InfoSet(info, key="/NetCDF/FV3/missing_value", value=field_3d_real % missingValue, rc=rc); ESMF_ERR(rc)
@@ -368,76 +268,7 @@ contains
       end select
 
       if (.not. isVarArray) then
-#if 0
-         call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value="atm", rc=rc); ESMF_ERR(rc)
-
-         do i = 1, nDims
-           call mpas_pool_get_dimension(block % dimensions, trim(dimNames(i)), dimSize_ptr)
-
-           if (associated(dimSize_ptr)) then
-               dimSize = dimSize_ptr
-           else
-               dimSize = -1
-           end if
-
-           if (i == nDims) then ! last dimension should be one of the decomposed nCells, nEdges, nVertices
-               if (trim(dimNames(i)) == 'nCells' .or. trim(dimNames(i)) == 'nEdges' .or. trim(dimNames(i)) == 'nVertices') then
-                   cycle
-               else
-                   call mpas_log_write(subname//' Last dimension is not a decomposed dimension', MPAS_LOG_CRIT)
-               end if
-           end if
-
-           if (dimSize >= 0) then
-               is_unique = .true.
-               do j = 1, size(dim_info_arr)
-                   if (trim(dimNames(i)) == trim(dim_info_arr(j) % dimName)) then
-                       if (dimSize /= dim_info_arr(j) % dimSize) then
-                          write(0,*)'conflictiing dimSize for ', trim(output_vars(n)%var_name), ' dimension ', trim(dimNames(i)), ' ', dimSize, dim_info_arr(j) % dimSize
-                          stop 1
-                       end if
-                       is_unique = .false.
-                       exit
-                   end if
-               end do
-               ! If unique, append to collection
-               if (is_unique) then
-                   total_unique = size(dim_info_arr)
-                   call resize_dim_info_array(dim_info_arr, total_unique + 1)
-                   dim_info_arr(total_unique + 1) % dimName = trim(dimNames(i))
-                   dim_info_arr(total_unique + 1) % dimSize = dimSize
-               end if
-           end if
-
-         end do
-
-         call ESMF_InfoSet(bundle_info, key='/NetCDF/MPAS/variables/'//trim(output_vars(n)%var_name), values=dimNames(1:nDims-1), rc=rc); ESMF_ERR(rc) ! last nDims is distributed dimension
-         numVars = numVars + 1
-         variable_names(numVars) = trim(output_vars(n)%var_name)
-
-         do i = 1, size(attLists)
-            att_cursor => attLists(i) % attList
-            do while (associated(att_cursor))
-               if (att_cursor % attType == MPAS_ATT_INT) then
-                  call ESMF_InfoSet(field_info, key="/NetCDF/FV3/"//trim(att_cursor % attName), value=att_cursor % attValueInt, rc=rc); ESMF_ERR(rc)
-               else if (att_cursor % attType == MPAS_ATT_REAL) then
-                  call ESMF_InfoSet(field_info, key="/NetCDF/FV3/"//trim(att_cursor % attName), value=att_cursor % attValueReal, rc=rc); ESMF_ERR(rc)
-               else if (att_cursor % attType == MPAS_ATT_TEXT) then
-                  call ESMF_InfoSet(field_info, key="/NetCDF/FV3/"//trim(att_cursor % attName), value=trim(att_cursor % attValueText), rc=rc); ESMF_ERR(rc)
-               else
-                  ! write(0,*) i, '"'//trim(att_cursor % attName)//'" unknown type ', att_cursor % attType
-               end if
-               att_cursor => att_cursor % next
-            end do
-         end do
-
-         nullify(att_cursor)
-         nullify(attLists)
-
-         call ESMF_FieldBundleAdd(output_bundle,(/field/), rc=rc); ESMF_ERR(rc)
-#else
-         call add_field_to_bundle(output_vars(n)%var_name, attLists(1) % attList)
-#endif
+         call add_field_to_bundle(output_vars(n), attLists(1) % attList)
       end if
 
    end do
@@ -446,16 +277,10 @@ contains
    call ESMF_InfoSet(bundle_info, key="/NetCDF/FV3/grid_id", value=1, rc=rc); ESMF_ERR(rc)
    call ESMF_InfoSet(bundle_info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
 
-   call ESMF_InfoSet(bundle_info, key='/NetCDF/MPAS/variable_names', values=variable_names(1:numVars), rc=rc); ESMF_ERR(rc)
-
    ! dimensions attributes
-   allocate(dimension_names(size(dim_info_arr)))
    do i = 1, size(dim_info_arr)
-       ! write(0,*)trim(dim_info_arr(i) % dimName), ' ', dim_info_arr(i) % dimSize
-       call ESMF_InfoSet(bundle_info, key='/NetCDF/MPAS/dimensions/'//trim(dim_info_arr(i) % dimName), value=dim_info_arr(i) % dimSize, rc=rc); ESMF_ERR(rc)
-       dimension_names(i)=trim(dim_info_arr(i) % dimName)
+       call ESMF_InfoSet(bundle_info, key='/NetCDF/MPAS/ungridded_dimensions/'//trim(dim_info_arr(i) % dimName), value=dim_info_arr(i) % dimSize, rc=rc); ESMF_ERR(rc)
    end do
-   call ESMF_InfoSet(bundle_info, key='/NetCDF/MPAS/dimension_names', values=dimension_names, rc=rc); ESMF_ERR(rc)
 
    contains
 
@@ -512,9 +337,6 @@ contains
 
           call ESMF_InfoSet(bundle_info, key='/NetCDF/MPAS/variables/'//trim(varName), values=dimNames(1:nDims-1), rc=rc); ESMF_ERR(rc) ! last nDims is distributed dimension
 
-          numVars = numVars + 1
-          variable_names(numVars) = trim(varName)
-
           att_cursor => attList
           do while (associated(att_cursor))
              if (att_cursor % attType == MPAS_ATT_INT) then
@@ -536,40 +358,37 @@ contains
        end subroutine add_field_to_bundle
 
        subroutine resize_dim_info_array(arr, new_size)
-             type(dim_info_t), allocatable, intent(inout) :: arr(:)
-             integer, intent(in) :: new_size
+          type(dim_info_t), allocatable, intent(inout) :: arr(:)
+          integer, intent(in) :: new_size
 
-             type(dim_info_t), allocatable :: temp(:)
-             integer :: old_size, copy_size
+          type(dim_info_t), allocatable :: temp(:)
+          integer :: old_size, copy_size
 
-             old_size = size(arr)
-             allocate(temp(new_size))
+          old_size = size(arr)
+          allocate(temp(new_size))
 
-             ! Copy existing elements
-             copy_size = min(old_size, new_size)
-             temp(1:copy_size) = arr(1:copy_size)
+          ! Copy existing elements
+          copy_size = min(old_size, new_size)
+          temp(1:copy_size) = arr(1:copy_size)
 
-             ! Deallocate and reassign
-             deallocate(arr)
-             call move_alloc(temp, arr)
+          ! Deallocate and reassign
+          deallocate(arr)
+          call move_alloc(temp, arr)
        end subroutine resize_dim_info_array
 
  end subroutine ufs_mpas_create_output_bundle
 
- subroutine ufs_mpas_update_output_bundle(output_bundle, bundle_name, output_vars, rc)
+ subroutine ufs_mpas_update_output_bundle(output_bundle, output_vars, rc)
 
-   use mpas_attlist,       only : att_list_type, att_lists_type, &
-                                  MPAS_ATT_INT, MPAS_ATT_INTA, MPAS_ATT_REAL,MPAS_ATT_REALA, MPAS_ATT_TEXT, &
-                                  MPAS_LOG_CRIT
+   use mpas_attlist,       only : MPAS_LOG_CRIT
    use mpas_derived_types, only : field1dinteger, field2dinteger, field1dreal, field2dreal, field3dreal, &
                                   mpas_pool_type, mpas_pool_field_info_type, mpas_pool_real, mpas_pool_integer, block_type
    use mpas_pool_routines, only : pool_print_members, mpas_pool_get_field, mpas_pool_get_field_info, mpas_pool_get_dimension
    use mpas_log,           only : mpas_log_write
 
    type(ESMF_FieldBundle), intent(inout) :: output_bundle
-   character(len=*), intent(in)        :: bundle_name
-   type(out_var_info), intent(in)      :: output_vars(:)
-   integer, intent(out)                :: rc
+   character(len=*), intent(in)          :: output_vars(:)
+   integer, intent(out)                  :: rc
 
    character(*), parameter :: subname = 'ufs_mpas_update_output_bundle'
 
@@ -582,53 +401,27 @@ contains
    type(field2dreal), pointer :: field_2d_real
    type(field3dreal), pointer :: field_3d_real
 
-   type(ESMF_Mesh) :: mesh
    type(ESMF_Field) :: field
-   type(ESMF_Info) :: field_info, bundle_info
 
    real(ESMF_KIND_R4), pointer    :: ptr_r4_d1(:), ptr_r4_d2(:,:), ptr_r4_d3(:,:,:)
    real(ESMF_KIND_R8), pointer    :: ptr_r8_d1(:), ptr_r8_d2(:,:), ptr_r8_d3(:,:,:)
    integer(ESMF_KIND_I4), pointer :: ptr_i4_d1(:), ptr_i4_d2(:,:), ptr_i4_d3(:,:,:)
 
-   ! real(RKIND), allocatable :: pfull(:), phalf(:)
-
-   integer :: frestart(1)
    integer :: i,j,k,n
    integer :: localpet
 
-   type :: dim_info_t
-     character(64) :: dimName
-     integer :: dimSize
-   end type
-
-   type (dim_info_t), allocatable :: dim_info_arr(:)
-
-   type (block_type), pointer :: block
-   type (att_list_type), pointer :: att_cursor => null()
-   type (att_lists_type), dimension(:), pointer :: attLists => null()
-   character (len=StrKIND), dimension(5) :: dimNames
    logical :: isVarArray
-   logical :: is_unique
-   character(len=64), allocatable :: dimension_names(:)
-   integer :: total_unique, nDims, dimSize
-   integer, pointer :: dimSize_ptr
-   character(len=64) :: variable_names(3000)
-   integer :: numVars
-
 
    rc = 0
 
-   frestart(:) = -1
+   ASSERT (size(output_vars) > 0)
 
    localpet = domain_ptr % dminfo % my_proc_id
 
    allFields => domain_ptr % blocklist % allfields
 
-   variable_names = ''
-   numVars = 0
-
    do n = 1, size(output_vars)
-      field_name = trim(adjustl(output_vars(n)%var_name))
+      field_name = trim(adjustl(output_vars(n)))
 
       call mpas_log_write('Inquiring field information for "' // trim(adjustl(field_name)) // '"')
 
@@ -640,8 +433,7 @@ contains
          call mpas_log_write(subname//' Invalid field information for "' // trim(field_name) // '"', MPAS_LOG_CRIT)
       end if
 
-      dimNames = ''
-      nDims = mpas_pool_field_info % nDims
+      ! nDims = mpas_pool_field_info % nDims
       isVarArray = .false.
 
       select case (mpas_pool_field_info % fieldtype)
@@ -865,122 +657,5 @@ contains
                           rc=rc); ESMF_ERR(rc)
 
  end subroutine ufs_mpas_get_esmf_mesh
-
-
-  !> #########################################################################################
-  !> Convert one or more values of any intrinsic data types to a character string for pretty
-  !> printing.
-  !> If `value` contains more than one element, the elements will be stringified, delimited by `separator`, then concatenated.
-  !> If `value` contains exactly one element, the element will be stringified without using `separator`.
-  !> If `value` contains zero element or is of unsupported data types, an empty character string is produced.
-  !> If `separator` is not supplied, it defaults to ", " (i.e., a comma and a space).
-  !> (KCW, 2024-02-04)
-  !> Ported for UWM (DJS: 2025)
-  !> #########################################################################################
-  pure function stringify(value, separator)
-    use, intrinsic :: iso_fortran_env, only: int32, int64, real32, real64
-
-    class(*), intent(in) :: value(:)
-    character(*), optional, intent(in) :: separator
-    character(:), allocatable :: stringify
-
-    integer, parameter :: sizelimit = 1024
-
-    character(:), allocatable :: buffer, delimiter, format
-    character(:), allocatable :: value_c(:)
-    integer :: i, n, offset
-
-    if (present(separator)) then
-       delimiter = separator
-    else
-       delimiter = ', '
-    end if
-
-    n = min(size(value), sizelimit)
-
-    if (n == 0) then
-       stringify = ''
-
-       return
-    end if
-
-    select type (value)
-    type is (character(*))
-       allocate(character(len(value) * n + len(delimiter) * (n - 1)) :: buffer)
-
-       buffer(:) = ''
-       offset = 0
-
-       ! Workaround for a bug in GNU Fortran >= 12. This is perhaps the manifestation of GCC Bugzilla Bug 100819.
-       ! When a character string array is passed as the actual argument to an unlimited polymorphic dummy argument,
-       ! its array index and length parameter are mishandled.
-       allocate(character(len(value)) :: value_c(size(value)))
-
-       value_c(:) = value(:)
-
-       do i = 1, n
-          if (len(delimiter) > 0 .and. i > 1) then
-             buffer(offset + 1:offset + len(delimiter)) = delimiter
-             offset = offset + len(delimiter)
-          end if
-
-          if (len_trim(adjustl(value_c(i))) > 0) then
-             buffer(offset + 1:offset + len_trim(adjustl(value_c(i)))) = trim(adjustl(value_c(i)))
-             offset = offset + len_trim(adjustl(value_c(i)))
-          end if
-       end do
-
-       deallocate(value_c)
-    type is (integer(int32))
-       allocate(character(11 * n + len(delimiter) * (n - 1)) :: buffer)
-       allocate(character(17 + len(delimiter) + floor(log10(real(n))) + 1) :: format)
-
-       write(format, '(a, i0, 3a)') '(ss, ', n, '(i0, :, "', delimiter, '"))'
-       write(buffer, format) value
-    type is (integer(int64))
-       allocate(character(20 * n + len(delimiter) * (n - 1)) :: buffer)
-       allocate(character(17 + len(delimiter) + floor(log10(real(n))) + 1) :: format)
-
-       write(format, '(a, i0, 3a)') '(ss, ', n, '(i0, :, "', delimiter, '"))'
-       write(buffer, format) value
-    type is (logical)
-       allocate(character(1 * n + len(delimiter) * (n - 1)) :: buffer)
-       allocate(character(13 + len(delimiter) + floor(log10(real(n))) + 1) :: format)
-
-       write(format, '(a, i0, 3a)') '(', n, '(l1, :, "', delimiter, '"))'
-       write(buffer, format) value
-    type is (real(real32))
-       allocate(character(13 * n + len(delimiter) * (n - 1)) :: buffer)
-
-       if (maxval(abs(value)) < 1.0e5_real32) then
-          allocate(character(20 + len(delimiter) + floor(log10(real(n))) + 1) :: format)
-          write(format, '(a, i0, 3a)') '(ss, ', n, '(f13.6, :, "', delimiter, '"))'
-       else
-          allocate(character(23 + len(delimiter) + floor(log10(real(n))) + 1) :: format)
-          write(format, '(a, i0, 3a)') '(ss, ', n, '(es13.6e2, :, "', delimiter, '"))'
-       end if
-
-       write(buffer, format) value
-    type is (real(real64))
-       allocate(character(13 * n + len(delimiter) * (n - 1)) :: buffer)
-
-       if (maxval(abs(value)) < 1.0e5_real64) then
-          allocate(character(20 + len(delimiter) + floor(log10(real(n))) + 1) :: format)
-          write(format, '(a, i0, 3a)') '(ss, ', n, '(f13.6, :, "', delimiter, '"))'
-       else
-          allocate(character(23 + len(delimiter) + floor(log10(real(n))) + 1) :: format)
-          write(format, '(a, i0, 3a)') '(ss, ', n, '(es13.6e2, :, "', delimiter, '"))'
-       end if
-
-       write(buffer, format) value
-    class default
-       stringify = ''
-
-       return
-    end select
-
-    stringify = trim(buffer)
-
-  end function stringify
 
 end module ufs_mpas_wgc_output
