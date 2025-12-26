@@ -67,7 +67,7 @@
 
      private
      public get_outfile, lambert, rtll
-     public generate_dst_field_mask, add_dst_mask
+     public generate_dst_field_mask, generate_dst_field_mask_mesh, add_dst_mask
 !
 !-----------------------------------------------------------------------
 !
@@ -222,6 +222,7 @@
      real(8), dimension(:),         allocatable    :: slat
      real(8), dimension(:),         allocatable    :: lat, lon
      real(ESMF_KIND_R8), dimension(:,:), pointer   :: lonPtr, latPtr
+     real(ESMF_KIND_R8), dimension(:,:), pointer   :: lonCornerPtr, latCornerPtr
      real(ESMF_KIND_R8)                            :: rot_lon, rot_lat
      real(ESMF_KIND_R8)                            :: geo_lon, geo_lat
      real(ESMF_KIND_R8)                            :: lon1_r8, lat1_r8
@@ -718,7 +719,7 @@
            endif
            delon = 360.d0/real(imo(n),8)
            do i=1,imo(n)
-             lon(i) = real(i-1,8)*delon
+             lon(i) = 0.5*delon + real(i-1,8)*delon
            enddo
            do j=lbound(latPtr,2),ubound(latPtr,2)
              do i=lbound(lonPtr,1),ubound(lonPtr,1)
@@ -735,6 +736,47 @@
 
            deallocate(lat, lon)
 
+           ! Corner coordinates
+           call ESMF_GridAddCoord(wrtGrid(n), staggerLoc=ESMF_STAGGERLOC_CORNER, rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+           call ESMF_GridGetCoord(wrtGrid(n), staggerLoc=ESMF_STAGGERLOC_CORNER, coordDim=1, farrayPtr=lonCornerPtr, rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+           call ESMF_GridGetCoord(wrtGrid(n), staggerLoc=ESMF_STAGGERLOC_CORNER, coordDim=2, farrayPtr=latCornerPtr, rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+           allocate(lat(jmo(n)+1), lon(imo(n)+1))
+           if (mod(jmo(n),2) == 0) then
+             ! if jmo even, lats do not include poles and equator
+             delat = 180.d0/real(jmo(n),8)
+             if(write_nsflip) then
+               do j=1,jmo(n)+1
+                 lat(j) = 90.d0 - real(j-1,8)*delat
+               enddo
+             else
+               do j=1,jmo(n)+1
+                 lat(j) = -90.d0 + real(j-1,8)*delat
+               enddo
+             endif
+           else
+             ! if jmo odd, lats include poles and equator
+             stop 1
+           endif
+           delon = 360.d0/real(imo(n),8)
+           do i=1,imo(n)+1
+             lon(i) = real(i-1,8)*delon
+           enddo
+           do j=lbound(latCornerPtr,2),ubound(latCornerPtr,2)
+             do i=lbound(lonCornerPtr,1),ubound(lonCornerPtr,1)
+               lonCornerPtr(i,j) = lon(i)
+               latCornerPtr(i,j) = lat(j)
+             enddo
+           enddo
+
+           deallocate(lat, lon)
+
+
          else if ( trim(output_grid(n)) == 'regional_latlon' .or.        &
                    trim(output_grid(n)) == 'regional_latlon_moving' .or. &
                    trim(output_grid(n)) == 'rotated_latlon' .or.         &
@@ -748,35 +790,71 @@
 
            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+           ! Center coordinates
            call ESMF_GridAddCoord(wrtGrid(n), staggerLoc=ESMF_STAGGERLOC_CENTER, rc=rc)
            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-           call ESMF_GridGetCoord(wrtGrid(n), coordDim=1, farrayPtr=lonPtr, rc=rc)
+           call ESMF_GridGetCoord(wrtGrid(n), staggerLoc=ESMF_STAGGERLOC_CENTER, coordDim=1, farrayPtr=lonPtr, rc=rc)
            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-           call ESMF_GridGetCoord(wrtGrid(n), coordDim=2, farrayPtr=latPtr, rc=rc)
+           call ESMF_GridGetCoord(wrtGrid(n), staggerLoc=ESMF_STAGGERLOC_CENTER, coordDim=2, farrayPtr=latPtr, rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+           ! Corner coordinates
+           call ESMF_GridAddCoord(wrtGrid(n), staggerLoc=ESMF_STAGGERLOC_CORNER, rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+           call ESMF_GridGetCoord(wrtGrid(n), staggerLoc=ESMF_STAGGERLOC_CORNER, coordDim=1, farrayPtr=lonCornerPtr, rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+           call ESMF_GridGetCoord(wrtGrid(n), staggerLoc=ESMF_STAGGERLOC_CORNER, coordDim=2, farrayPtr=latCornerPtr, rc=rc)
            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
            if ( trim(output_grid(n)) == 'regional_latlon' ) then
+               delon = (lon2(n)-lon1(n))/(imo(n)-1)
+               delat = (lat2(n)-lat1(n))/(jmo(n)-1)
+               ! Center
                do j=lbound(lonPtr,2),ubound(lonPtr,2)
                do i=lbound(lonPtr,1),ubound(lonPtr,1)
-                 lonPtr(i,j) = lon1(n) + (lon2(n)-lon1(n))/(imo(n)-1) * (i-1)
-                 latPtr(i,j) = lat1(n) + (lat2(n)-lat1(n))/(jmo(n)-1) * (j-1)
+                 lonPtr(i,j) = lon1(n) + delon * (i-1)
+                 latPtr(i,j) = lat1(n) + delat * (j-1)
+               enddo
+               enddo
+               ! Corner
+               do j=lbound(lonCornerPtr,2),ubound(lonCornerPtr,2)
+               do i=lbound(lonCornerPtr,1),ubound(lonCornerPtr,1)
+                 lonCornerPtr(i,j) = lon1(n) + delon * (i-0.5)
+                 latCornerPtr(i,j) = lat1(n) + delat * (j-0.5)
                enddo
                enddo
            else if ( trim(output_grid(n)) == 'regional_latlon_moving' ) then
                ! Do not compute lonPtr, latPtr here. Will be done in the run phase
            else if ( trim(output_grid(n)) == 'rotated_latlon' ) then
+               delon = (lon2(n)-lon1(n))/(imo(n)-1)
+               delat = (lat2(n)-lat1(n))/(jmo(n)-1)
+               ! Center
                do j=lbound(lonPtr,2),ubound(lonPtr,2)
                do i=lbound(lonPtr,1),ubound(lonPtr,1)
-                 rot_lon = lon1(n) + (lon2(n)-lon1(n))/(imo(n)-1) * (i-1)
-                 rot_lat = lat1(n) + (lat2(n)-lat1(n))/(jmo(n)-1) * (j-1)
+                 rot_lon = lon1(n) + delon * (i-1)
+                 rot_lat = lat1(n) + delat * (j-1)
                  call rtll(rot_lon, rot_lat, geo_lon, geo_lat, dble(cen_lon(n)), dble(cen_lat(n)))
                  if (geo_lon < 0.0) geo_lon = geo_lon + 360.0
                  lonPtr(i,j) = geo_lon
                  latPtr(i,j) = geo_lat
                enddo
                enddo
+               ! Corner
+               do j=lbound(lonCornerPtr,2),ubound(lonCornerPtr,2)
+               do i=lbound(lonCornerPtr,1),ubound(lonCornerPtr,1)
+                 rot_lon = lon1(n) + delon * (i-0.5)
+                 rot_lat = lat1(n) + delat * (j-0.5)
+                 call rtll(rot_lon, rot_lat, geo_lon, geo_lat, dble(cen_lon(n)), dble(cen_lat(n)))
+                 if (geo_lon < 0.0) geo_lon = geo_lon + 360.0
+                 lonCornerPtr(i,j) = geo_lon
+                 latCornerPtr(i,j) = geo_lat
+               enddo
+               enddo
+
                rot_lon = lon1(n)
                rot_lat = lat1(n)
                call rtll(rot_lon, rot_lat, geo_lon, geo_lat, dble(cen_lon(n)), dble(cen_lat(n)))
@@ -811,6 +889,8 @@
                lat1_r8 = dble(lat1(n))
                call lambert(dble(stdlat1(n)),dble(stdlat2(n)),dble(cen_lat(n)),dble(cen_lon(n)), &
                             lon1_r8,lat1_r8,x1,y1, 1)
+
+               ! Center
                do j=lbound(lonPtr,2),ubound(lonPtr,2)
                do i=lbound(lonPtr,1),ubound(lonPtr,1)
                  x = x1 + dx(n) * (i-1)
@@ -820,6 +900,19 @@
                  if (geo_lon <0.0) geo_lon = geo_lon + 360.0
                  lonPtr(i,j) = geo_lon
                  latPtr(i,j) = geo_lat
+               enddo
+               enddo
+
+               ! Corner
+               do j=lbound(lonCornerPtr,2),ubound(lonCornerPtr,2)
+               do i=lbound(lonCornerPtr,1),ubound(lonCornerPtr,1)
+                 x = x1 + dx(n) * (i-0.5)
+                 y = y1 + dy(n) * (j-0.5)
+                 call lambert(dble(stdlat1(n)),dble(stdlat2(n)),dble(cen_lat(n)),dble(cen_lon(n)), &
+                              geo_lon,geo_lat,x,y,-1)
+                 if (geo_lon <0.0) geo_lon = geo_lon + 360.0
+                 lonCornerPtr(i,j) = geo_lon
+                 latCornerPtr(i,j) = geo_lat
                enddo
                enddo
            endif
@@ -4766,6 +4859,82 @@
 
         rc = 0
       end subroutine generate_dst_field_mask
+
+      subroutine generate_dst_field_mask_mesh(src_mesh, dst_grid, dst_field, rc)
+
+        type(ESMF_Mesh), intent(in)    :: src_mesh
+        type(ESMF_Grid), intent(in)    :: dst_grid
+        type(ESMF_Field), intent(inout):: dst_field
+        integer, intent(out)           :: rc
+
+        type(ESMF_Field)               :: src_field
+        real(ESMF_KIND_R4), pointer    :: src_ptr(:)
+        real(ESMF_KIND_R4), pointer    :: dst_ptr(:,:)
+        integer(ESMF_KIND_I4), pointer :: maskPtr(:,:)
+        integer(ESMF_KIND_I4), pointer :: ptr_dst_status(:,:)
+        type(ESMF_RouteHandle)         :: routehandle_mask
+        character(ESMF_MAXSTR)         :: itemName
+        integer                        :: localDeCount
+        integer                        :: ig,jg, istart,iend, jstart,jend
+        integer                        :: srcTermProcessing
+
+
+        src_field = ESMF_FieldCreate(src_mesh, &
+                                     typekind=ESMF_TYPEKIND_R4, &
+                                     meshloc=ESMF_MESHLOC_ELEMENT, &
+                                     rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_FieldGet(src_field, localDeCount=localDeCount, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        if (localDeCount > 0) then
+          call ESMF_FieldGet(src_field, farrayPtr=src_ptr, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          src_ptr = 1.0
+        end if
+
+
+        dst_field = ESMF_FieldCreate(dst_grid, &
+                                     typekind=ESMF_TYPEKIND_R4, &
+                                     staggerloc=ESMF_STAGGERLOC_CENTER, &
+                                     rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_FieldGet(dst_field, localDeCount=localDeCount, rc=rc);
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        if (localDeCount > 0) then
+          call ESMF_FieldGet(dst_field, farrayPtr=dst_ptr, rc=rc);
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          dst_ptr = 0.0
+        end if
+
+        srcTermProcessing = 0
+
+        call ESMF_FieldRegridStore(srcField=src_field, &
+                                   dstField=dst_field, &
+                                   regridmethod=ESMF_REGRIDMETHOD_BILINEAR, &
+                                   routehandle=routehandle_mask, &
+                                   unmappedaction=ESMF_UNMAPPEDACTION_IGNORE, &
+                                   srcTermProcessing=srcTermProcessing, &
+                                   rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_FieldRegrid(src_field, dst_field, &
+                              routehandle=routehandle_mask, &
+                              termorderflag=ESMF_TERMORDER_SRCSEQ, &
+                              zeroregion=ESMF_REGION_SELECT, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_RouteHandleDestroy(routehandle_mask, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_FieldDestroy(src_field, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        rc = 0
+      end subroutine generate_dst_field_mask_mesh
 
       subroutine add_dst_mask(dst_grid, dst_field, dstOutsideMaskValue, rc)
 

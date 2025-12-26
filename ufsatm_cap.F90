@@ -60,7 +60,8 @@ module ufsatm_cap_mod
 
   use module_wrt_grid_comp,   only: wrtSS => SetServices,                    &
                                     dstOutsideMaskValue,                     &
-                                    generate_dst_field_mask, add_dst_mask
+                                    generate_dst_field_mask, add_dst_mask,   &
+                                    generate_dst_field_mask_mesh
 !
   use module_cplfields,       only: importFieldsValid, queryImportFields
 
@@ -260,7 +261,9 @@ module ufsatm_cap_mod
     logical                                :: top_parent_is_global
     integer                                :: ngrids
     type(ESMF_Grid)                        :: src_grid, dst_grid
+    type(ESMF_Mesh)                        :: src_mesh
     type(ESMF_Field), allocatable          :: dst_field_mask(:)
+    type(ESMF_GeomType_Flag)               :: geomtype
 !
 !------------------------------------------------------------------------
 !
@@ -973,7 +976,6 @@ module ufsatm_cap_mod
                            ' needs_dst_mask: ', needs_dst_mask
           endif
 
-#ifdef FV3
           ! only on write group 1, RH's on groups > 1 are computed from RH on group 1
           if (needs_dst_mask .and. i==1) then
 
@@ -985,11 +987,30 @@ module ufsatm_cap_mod
 
             if (.not. ESMF_FieldIsCreated(dst_field_mask(grid_id))) then
               if (mype == 0) print *, '       generate destination mask for grid ', grid_id
-              call ESMF_FieldBundleGet(fcstFB(j), grid=src_grid, rc=rc)
+              call ESMF_FieldBundleGet(fcstFB(j), geomtype=geomtype, rc=rc)
               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-              call generate_dst_field_mask(src_grid, dst_grid, dst_field_mask(grid_id), rc=rc)
-              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              if (geomtype == ESMF_GEOMTYPE_GRID) then
+
+                call ESMF_FieldBundleGet(fcstFB(j), grid=src_grid, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+                call generate_dst_field_mask(src_grid, dst_grid, dst_field_mask(grid_id), rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+              else if (geomtype == ESMF_GEOMTYPE_MESH) then
+
+                call ESMF_FieldBundleGet(fcstFB(j), mesh=src_mesh, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+                call generate_dst_field_mask_mesh(src_mesh, dst_grid, dst_field_mask(grid_id), rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+              else
+                call ESMF_LogSetError(ESMF_RC_ARG_BAD, msg="Only Grid or Mesh supported in fcstState.", line=__LINE__, file=__FILE__)
+                return
+              end if
+
             else
               if (mype == 0) print *, '       use already generated destination mask for grid ', grid_id
             endif
@@ -998,7 +1019,6 @@ module ufsatm_cap_mod
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
           end if ! .not. is_moving_fb(j)
-#endif
 
           ! decide between Redist() and Regrid()
           if (is_moving_fb(j)) then

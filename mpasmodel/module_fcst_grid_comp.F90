@@ -39,15 +39,18 @@ module module_fcst_grid_comp
   type(ESMF_FieldBundle) :: history_nearest_dtos_field_bundle
   type(ESMF_FieldBundle) :: history_nearest_stod_field_bundle
   type(ESMF_FieldBundle) :: history_patch_field_bundle
+  type(ESMF_FieldBundle) :: history_conserve_field_bundle
   integer, parameter :: max_num_history_vars = 1000
   character(len=64) :: history_bilinear_vars(max_num_history_vars)
   character(len=64) :: history_nearest_dtos_vars(max_num_history_vars)
   character(len=64) :: history_nearest_stod_vars(max_num_history_vars)
   character(len=64) :: history_patch_vars(max_num_history_vars)
+  character(len=64) :: history_conserve_vars(max_num_history_vars)
   integer :: num_history_bilinear_vars = 0
   integer :: num_history_nearest_dtos_vars = 0
   integer :: num_history_nearest_stod_vars = 0
   integer :: num_history_patch_vars = 0
+  integer :: num_history_conserve_vars = 0
 
   public SetServices
 
@@ -201,6 +204,11 @@ contains
       call ESMF_StateAdd(exportState, (/ history_patch_field_bundle /), rc=rc); ESMF_ERR(rc)
     end if
 
+    if (num_history_conserve_vars > 0) then
+      call ufs_mpas_create_history_bundle(history_conserve_field_bundle, history_conserve_vars(1:num_history_conserve_vars), 'conserve', rc=rc); ESMF_ERR(rc)
+      call ESMF_StateAdd(exportState, (/ history_conserve_field_bundle /), rc=rc); ESMF_ERR(rc)
+    end if
+
     ngrids = 1
     allocate(is_moving(ngrids))
     is_moving = .false.
@@ -336,6 +344,9 @@ contains
        if (num_history_patch_vars > 0) then
           call ufs_mpas_update_history_bundle(history_patch_field_bundle, history_patch_vars(1:num_history_patch_vars), rc=rc); ESMF_ERR(rc)
        end if
+       if (num_history_conserve_vars > 0) then
+          call ufs_mpas_update_history_bundle(history_conserve_field_bundle, history_conserve_vars(1:num_history_conserve_vars), rc=rc); ESMF_ERR(rc)
+       end if
     end if
 
     ! Timing info (debug mode)
@@ -443,6 +454,9 @@ contains
       else if (trim(var_interp_method) == 'patch') then
           num_history_patch_vars = num_history_patch_vars + 1
           history_patch_vars(num_history_patch_vars) = trim(var_name)
+      else if (trim(var_interp_method) == 'conserve') then
+          num_history_conserve_vars = num_history_conserve_vars + 1
+          history_conserve_vars(num_history_conserve_vars) = trim(var_name)
       else
           write(0, '(A,I0,A)') "Error on line ", i, " in file "//trim(filename)//", unknown interp_method"
           rc = 1
