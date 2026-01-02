@@ -719,7 +719,7 @@
            endif
            delon = 360.d0/real(imo(n),8)
            do i=1,imo(n)
-             lon(i) = 0.5*delon + real(i-1,8)*delon
+             lon(i) = real(i-1,8)*delon
            enddo
            do j=lbound(latPtr,2),ubound(latPtr,2)
              do i=lbound(lonPtr,1),ubound(lonPtr,1)
@@ -761,11 +761,23 @@
              endif
            else
              ! if jmo odd, lats include poles and equator
-             stop 1
+             delat = 180.d0/real(jmo(n)-1,8)
+             if(write_nsflip) then
+               do j=1,jmo(n)+1
+                 lat(j) = 90.d0 + 0.5*delat - real(j-1,8)*delat
+               enddo
+             else
+               do j=1,jmo(n)+1
+                 lat(j) = -90.d0 - 0.5*delat + real(j-1,8)*delat
+               enddo
+             endif
+             do j=1,jmo(n)+1
+               lat(j) = max(-90.0,min(90.0,lat(j)))
+             enddo
            endif
            delon = 360.d0/real(imo(n),8)
            do i=1,imo(n)+1
-             lon(i) = real(i-1,8)*delon
+             lon(i) = real(i-1.5,8)*delon
            enddo
            do j=lbound(latCornerPtr,2),ubound(latCornerPtr,2)
              do i=lbound(lonCornerPtr,1),ubound(lonCornerPtr,1)
@@ -775,7 +787,6 @@
            enddo
 
            deallocate(lat, lon)
-
 
          else if ( trim(output_grid(n)) == 'regional_latlon' .or.        &
                    trim(output_grid(n)) == 'regional_latlon_moving' .or. &
@@ -823,8 +834,8 @@
                ! Corner
                do j=lbound(lonCornerPtr,2),ubound(lonCornerPtr,2)
                do i=lbound(lonCornerPtr,1),ubound(lonCornerPtr,1)
-                 lonCornerPtr(i,j) = lon1(n) + delon * (i-0.5)
-                 latCornerPtr(i,j) = lat1(n) + delat * (j-0.5)
+                 lonCornerPtr(i,j) = lon1(n) + delon * (i-1.5)
+                 latCornerPtr(i,j) = lat1(n) + delat * (j-1.5)
                enddo
                enddo
            else if ( trim(output_grid(n)) == 'regional_latlon_moving' ) then
@@ -846,8 +857,8 @@
                ! Corner
                do j=lbound(lonCornerPtr,2),ubound(lonCornerPtr,2)
                do i=lbound(lonCornerPtr,1),ubound(lonCornerPtr,1)
-                 rot_lon = lon1(n) + delon * (i-0.5)
-                 rot_lat = lat1(n) + delat * (j-0.5)
+                 rot_lon = lon1(n) + delon * (i-1.5)
+                 rot_lat = lat1(n) + delat * (j-1.5)
                  call rtll(rot_lon, rot_lat, geo_lon, geo_lat, dble(cen_lon(n)), dble(cen_lat(n)))
                  if (geo_lon < 0.0) geo_lon = geo_lon + 360.0
                  lonCornerPtr(i,j) = geo_lon
@@ -906,8 +917,8 @@
                ! Corner
                do j=lbound(lonCornerPtr,2),ubound(lonCornerPtr,2)
                do i=lbound(lonCornerPtr,1),ubound(lonCornerPtr,1)
-                 x = x1 + dx(n) * (i-0.5)
-                 y = y1 + dy(n) * (j-0.5)
+                 x = x1 + dx(n) * (i-1.5)
+                 y = y1 + dy(n) * (j-1.5)
                  call lambert(dble(stdlat1(n)),dble(stdlat2(n)),dble(cen_lat(n)),dble(cen_lon(n)), &
                               geo_lon,geo_lat,x,y,-1)
                  if (geo_lon <0.0) geo_lon = geo_lon + 360.0
