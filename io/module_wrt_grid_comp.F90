@@ -822,32 +822,28 @@
            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
            if ( trim(output_grid(n)) == 'regional_latlon' ) then
-               delon = (lon2(n)-lon1(n))/(imo(n)-1)
-               delat = (lat2(n)-lat1(n))/(jmo(n)-1)
                ! Center
                do j=lbound(lonPtr,2),ubound(lonPtr,2)
                do i=lbound(lonPtr,1),ubound(lonPtr,1)
-                 lonPtr(i,j) = lon1(n) + delon * (i-1)
-                 latPtr(i,j) = lat1(n) + delat * (j-1)
+                 lonPtr(i,j) = lon1(n) + (lon2(n)-lon1(n))/(imo(n)-1) * (i-1)
+                 latPtr(i,j) = lat1(n) + (lat2(n)-lat1(n))/(jmo(n)-1) * (j-1)
                enddo
                enddo
                ! Corner
                do j=lbound(lonCornerPtr,2),ubound(lonCornerPtr,2)
                do i=lbound(lonCornerPtr,1),ubound(lonCornerPtr,1)
-                 lonCornerPtr(i,j) = lon1(n) + delon * (i-1.5)
-                 latCornerPtr(i,j) = lat1(n) + delat * (j-1.5)
+                 lonCornerPtr(i,j) = lon1(n) + (lon2(n)-lon1(n))/(imo(n)-1) * (i-1.5)
+                 latCornerPtr(i,j) = lat1(n) + (lat2(n)-lat1(n))/(jmo(n)-1) * (j-1.5)
                enddo
                enddo
            else if ( trim(output_grid(n)) == 'regional_latlon_moving' ) then
                ! Do not compute lonPtr, latPtr here. Will be done in the run phase
            else if ( trim(output_grid(n)) == 'rotated_latlon' ) then
-               delon = (lon2(n)-lon1(n))/(imo(n)-1)
-               delat = (lat2(n)-lat1(n))/(jmo(n)-1)
                ! Center
                do j=lbound(lonPtr,2),ubound(lonPtr,2)
                do i=lbound(lonPtr,1),ubound(lonPtr,1)
-                 rot_lon = lon1(n) + delon * (i-1)
-                 rot_lat = lat1(n) + delat * (j-1)
+                 rot_lon = lon1(n) + (lon2(n)-lon1(n))/(imo(n)-1) * (i-1)
+                 rot_lat = lat1(n) + (lat2(n)-lat1(n))/(jmo(n)-1) * (j-1)
                  call rtll(rot_lon, rot_lat, geo_lon, geo_lat, dble(cen_lon(n)), dble(cen_lat(n)))
                  if (geo_lon < 0.0) geo_lon = geo_lon + 360.0
                  lonPtr(i,j) = geo_lon
@@ -857,8 +853,8 @@
                ! Corner
                do j=lbound(lonCornerPtr,2),ubound(lonCornerPtr,2)
                do i=lbound(lonCornerPtr,1),ubound(lonCornerPtr,1)
-                 rot_lon = lon1(n) + delon * (i-1.5)
-                 rot_lat = lat1(n) + delat * (j-1.5)
+                 rot_lon = lon1(n) + (lon2(n)-lon1(n))/(imo(n)-1) * (i-1.5)
+                 rot_lat = lat1(n) + (lat2(n)-lat1(n))/(jmo(n)-1) * (j-1.5)
                  call rtll(rot_lon, rot_lat, geo_lon, geo_lat, dble(cen_lon(n)), dble(cen_lat(n)))
                  if (geo_lon < 0.0) geo_lon = geo_lon + 360.0
                  lonCornerPtr(i,j) = geo_lon
