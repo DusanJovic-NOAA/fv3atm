@@ -193,9 +193,17 @@ contains
             dimNames(1:nDims) = field_1d_real % dimNames
             block => field_1d_real % block
 
-            field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
-            call ESMF_FieldGet(field, farrayPtr=ptr_r4_d1, rc=rc); ESMF_ERR(rc)
-            ptr_r4_d1 = field_1d_real%array(1:nCellsSolve)
+            if (trim(dimNames(1)) == 'nCells') then
+                field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
+                call ESMF_FieldGet(field, farrayPtr=ptr_r4_d1, rc=rc); ESMF_ERR(rc)
+                ptr_r4_d1 = field_1d_real%array(1:nCellsSolve)
+            else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
+                field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, meshloc=ESMF_MESHLOC_NODE, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
+                call ESMF_FieldGet(field, farrayPtr=ptr_r4_d1, rc=rc); ESMF_ERR(rc)
+                ptr_r4_d1 = field_1d_real%array(1:nVerticesSolve)
+            else
+                write(0,*)'Unsupported dim: ', trim(dimNames(1))
+            end if
 
             call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
             ! call ESMF_InfoSet(info, key="/NetCDF/FV3/missing_value", value=field_1d_real % missingValue, rc=rc); ESMF_ERR(rc)
@@ -208,10 +216,19 @@ contains
             dimNames(1:nDims) = field_2d_real % dimNames
             block => field_2d_real % block
 
-            field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(field_2d_real%array,dim=1)], &
-                                     meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
-            call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
-            ptr_r4_d2 = field_2d_real%array(:,1:nCellsSolve)
+            if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
+                field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(field_2d_real%array,dim=1)], &
+                                         meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
+                call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
+                ptr_r4_d2 = field_2d_real%array(:,1:nCellsSolve)
+            else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
+                field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(field_2d_real%array,dim=1)], &
+                                         meshloc=ESMF_MESHLOC_NODE, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
+                call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
+                ptr_r4_d2 = field_2d_real%array(:,1:nVerticesSolve)
+            else
+                write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims))
+            end if
 
             call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
             ! call ESMF_InfoSet(info, key="/NetCDF/FV3/missing_value", value=field_2d_real % missingValue, rc=rc); ESMF_ERR(rc)
@@ -410,7 +427,9 @@ contains
    integer :: i,j,k,n
    integer :: localpet
 
+   character (len=StrKIND), dimension(5) :: dimNames
    logical :: isVarArray
+   integer :: nDims
 
    rc = 0
 
@@ -433,20 +452,24 @@ contains
          call mpas_log_write(subname//' Invalid field information for "' // trim(field_name) // '"', MPAS_LOG_CRIT)
       end if
 
-      ! nDims = mpas_pool_field_info % nDims
+      dimNames = ''
+      nDims = mpas_pool_field_info % nDims
       isVarArray = .false.
 
       select case (mpas_pool_field_info % fieldtype)
       case (mpas_pool_integer)
          select case (mpas_pool_field_info % ndims)
+         ! FIXME add check for nCells vs. nVertices
          case (1)
             call mpas_pool_get_field(allFields, trim(field_name), field_1d_integer, timelevel=1)
+            dimNames(1:nDims) = field_1d_integer % dimNames
             call ESMF_FieldBundleGet(output_bundle, fieldName=field_name, field=field, rc=rc); ESMF_ERR(rc)
             call ESMF_FieldGet(field, farrayPtr=ptr_i4_d1, rc=rc); ESMF_ERR(rc)
             ptr_i4_d1 = field_1d_integer%array(1:nCellsSolve)
             nullify(field_1d_integer)
          case (2)
             call mpas_pool_get_field(allFields, trim(field_name), field_2d_integer, timelevel=1)
+            dimNames(1:nDims) = field_2d_integer % dimNames
             call ESMF_FieldBundleGet(output_bundle, fieldName=field_name, field=field, rc=rc); ESMF_ERR(rc)
             call ESMF_FieldGet(field, farrayPtr=ptr_i4_d2, rc=rc); ESMF_ERR(rc)
             ptr_i4_d2 = field_2d_integer%array(:,1:nCellsSolve)
@@ -460,30 +483,57 @@ contains
 
          case (1)
             call mpas_pool_get_field(allFields, trim(field_name), field_1d_real, timelevel=1)
+            dimNames(1:nDims) = field_1d_real % dimNames
             call ESMF_FieldBundleGet(output_bundle, fieldName=field_name, field=field, rc=rc); ESMF_ERR(rc)
             call ESMF_FieldGet(field, farrayPtr=ptr_r4_d1, rc=rc); ESMF_ERR(rc)
-            ptr_r4_d1 = field_1d_real%array(1:nCellsSolve)
+            if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
+               ptr_r4_d1 = field_1d_real%array(1:nCellsSolve)
+            else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
+               ptr_r4_d1 = field_1d_real%array(1:nVerticesSolve)
+            else
+               write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims))
+            end if
             nullify(field_1d_real)
          case (2)
             call mpas_pool_get_field(allFields, trim(field_name), field_2d_real, timelevel=1)
+            dimNames(1:nDims) = field_2d_real % dimNames
             call ESMF_FieldBundleGet(output_bundle, fieldName=field_name, field=field, rc=rc); ESMF_ERR(rc)
             call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
-            ptr_r4_d2 = field_2d_real%array(:,1:nCellsSolve)
+            if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
+               ptr_r4_d2 = field_2d_real%array(:,1:nCellsSolve)
+            else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
+               ptr_r4_d2 = field_2d_real%array(:,1:nVerticesSolve)
+            else
+               write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims))
+            end if
             nullify(field_2d_real)
 
          case (3)
             call mpas_pool_get_field(allFields, trim(field_name), field_3d_real, timelevel=1)
+            dimNames(1:nDims) = field_3d_real % dimNames
 
             if (field_3d_real % isVarArray) then
                do k = 1, size(field_3d_real % constituentNames)
                   call ESMF_FieldBundleGet(output_bundle, fieldName=trim(field_3d_real % constituentNames(k)), field=field, rc=rc); ESMF_ERR(rc)
                   call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
-                  ptr_r4_d2 = field_3d_real%array(k,:,1:nCellsSolve)
+                  if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
+                     ptr_r4_d2 = field_3d_real%array(k,:,1:nCellsSolve)
+                  else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
+                     ptr_r4_d2 = field_3d_real%array(k,:,1:nVerticesSolve)
+                  else
+                     write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims))
+                  end if
                end do ! k = 1, size(field_3d_real % constituentNames)
             else
                call ESMF_FieldBundleGet(output_bundle, fieldName=field_name, field=field, rc=rc); ESMF_ERR(rc)
                call ESMF_FieldGet(field, farrayPtr=ptr_r4_d3, rc=rc); ESMF_ERR(rc)
-               ptr_r4_d3 = field_3d_real%array(:,:,1:nCellsSolve)
+               if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
+                  ptr_r4_d3 = field_3d_real%array(:,:,1:nCellsSolve)
+               else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
+                  ptr_r4_d3 = field_3d_real%array(:,:,1:nVerticesSolve)
+               else
+                  write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims))
+               end if
             end if
             nullify(field_3d_real)
 
