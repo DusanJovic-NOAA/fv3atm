@@ -180,7 +180,7 @@
      type(ESMF_Config)                       :: cf, cf_output_grid
      type(ESMF_Info)                         :: info, infoFcstMesh, infoWrtGrid
      type(ESMF_DELayout)                     :: delayout
-     type(ESMF_GeomType_Flag)                :: geomtype
+     type(ESMF_GeomType_Flag)                :: fcst_geomtype, wrt_geomtype
      type(ESMF_Grid)                         :: fcstGrid
      type(ESMF_Mesh)                         :: fcstMesh
      type(ESMF_Grid), allocatable            :: wrtGrid(:)
@@ -234,6 +234,8 @@
      integer                                 :: num_output_file
 
      type(ESMF_DistGrid)                     :: acceptorDG, newAcceptorDG
+     type(ESMF_DistGrid)                     :: acceptorElemDG, newAcceptorElemDG
+     type(ESMF_DistGrid)                     :: acceptorNodalDG, newAcceptorNodalDG
      integer                                 :: grid_id
 
      logical                    :: history_file_on_native_grid
@@ -1068,13 +1070,13 @@
 
          if (fieldCount > 0) then
 
-           call ESMF_FieldBundleGet(fcstFB, geomtype=geomtype, rc=rc)
+           call ESMF_FieldBundleGet(fcstFB, geomtype=fcst_geomtype, rc=rc)
            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-           if (geomtype == ESMF_GEOMTYPE_GRID) then
+           if (fcst_geomtype == ESMF_GEOMTYPE_GRID) then
              call ESMF_FieldBundleGet(fcstFB, grid=fcstGrid, rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-           else if (geomtype == ESMF_GEOMTYPE_MESH) then
+           else if (fcst_geomtype == ESMF_GEOMTYPE_MESH) then
              call ESMF_FieldBundleGet(fcstFB, mesh=fcstMesh, rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
            else
@@ -1112,15 +1114,37 @@
              ! must be the same grid as forecast grid, not the output grid for this grid_id (wrtGrid(grid_id)).
              ! For 'cubed_sphere_grid' these are the same, but for all other output grids (like Lambert) they are not.
 
-             ! create a grid from fcstGrid on forecast grid comp, by rebalancing distgrid to the local PETs
-             ! access the acceptor DistGrid
-             call ESMF_GridGet(fcstGrid, distgrid=acceptorDG, rc=rc)
-             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-             ! rebalance the acceptor DistGrid across the local PETs
-             newAcceptorDG = ESMF_DistGridCreate(acceptorDG, balanceflag=.true., rc=rc)
-             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-             actualWrtGrid = ESMF_GridCreate(fcstGrid, newAcceptorDG, rc=rc)
-             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+             if (fcst_geomtype == ESMF_GEOMTYPE_GRID) then
+
+               ! create a grid from fcstGrid on forecast grid comp, by rebalancing distgrid to the local PETs
+               ! access the acceptor DistGrid
+               call ESMF_GridGet(fcstGrid, distgrid=acceptorDG, rc=rc)
+               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+               ! rebalance the acceptor DistGrid across the local PETs
+               newAcceptorDG = ESMF_DistGridCreate(acceptorDG, balanceflag=.true., rc=rc)
+               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+               actualWrtGrid = ESMF_GridCreate(fcstGrid, newAcceptorDG, rc=rc)
+               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+               wrt_geomtype = ESMF_GEOMTYPE_GRID
+             else if (fcst_geomtype == ESMF_GEOMTYPE_MESH) then
+               ! create a mesh from fcstMesh on forecast grid comp, by rebalancing distgrid to the local PETs
+               ! access the acceptor DistGrid
+               call ESMF_MeshGet(fcstMesh, elementDistgrid=acceptorElemDG, nodalDistgrid=acceptorNodalDG, rc=rc)
+               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+               ! rebalance the acceptor DistGrid across the local PETs
+               newAcceptorElemDG = ESMF_DistGridCreate(acceptorElemDG, balanceflag=.true., rc=rc)
+               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+               newAcceptorNodalDG = ESMF_DistGridCreate(acceptorNodalDG, balanceflag=.true., rc=rc)
+               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+               actualWrtMesh = ESMF_MeshCreate(fcstMesh, elementDistgrid=newAcceptorElemDG, nodalDistgrid=newAcceptorNodalDG, rc=rc)
+               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+             else
+               call ESMF_LogSetError(ESMF_RC_ARG_BAD, msg="Only Grid or Mesh supported in fcstState.", line=__LINE__, file=__FILE__)
+               return
+             end if
 
              call ESMF_AttributeSet(fieldbundle, convention="NetCDF", purpose="FV3-nooutput", name="output_grid", value="restart_grid", rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
@@ -1228,10 +1252,10 @@
              deallocate(gridToFieldMap, ungriddedLBound, ungriddedUBound)
            enddo
 
-           if (geomtype == ESMF_GEOMTYPE_GRID) then
+           if (fcst_geomtype == ESMF_GEOMTYPE_GRID) then
              call ESMF_AttributeCopy(fcstGrid, actualWrtGrid, attcopy=ESMF_ATTCOPY_REFERENCE, rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-           else if (geomtype == ESMF_GEOMTYPE_MESH) then
+           else if (fcst_geomtype == ESMF_GEOMTYPE_MESH) then
              call ESMF_InfoGetFromHost(fcstMesh, info=infoFcstMesh, rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
              call ESMF_InfoGetFromHost(actualWrtGrid, info=infoWrtGrid, rc=rc)
