@@ -212,11 +212,9 @@ contains
       call ESMF_StateAdd(exportState, (/ history_conserve_field_bundle /), rc=rc); ESMF_ERR(rc)
     end if
 
-#if 0
     ! Restart bundle
     call ufs_mpas_create_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
     call ESMF_StateAdd(exportState, (/ restart_field_bundle /), rc=rc); ESMF_ERR(rc)
-#endif
 
     ngrids = 1
     allocate(is_moving(ngrids))

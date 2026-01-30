@@ -51,6 +51,7 @@
      use module_write_restart_netcdf, only : write_restart_netcdf
 #ifdef MPASMODEL
      use module_mpas_write_history, only : mpas_write_history
+     use mpas_esmf_mesh,            only : create_mpas_esmf_mesh_from_file
 #endif
 #ifndef MPASMODEL
      use physcons,            only : pi => con_pi
@@ -196,6 +197,7 @@
      type(ESMF_FieldBundle)                  :: fcstFB, fieldbundle, mirrorFB
      type(ESMF_Field),          allocatable  :: fcstField(:)
      type(ESMF_TypeKind_Flag)                :: typekind
+     integer                                 :: rank
      character(len=80),         allocatable  :: fieldnamelist(:)
      integer                                 :: fieldDimCount, gridDimCount, tk, sloc
      integer                                 :: fieldGeomDimCount
@@ -204,6 +206,7 @@
      integer,                   allocatable  :: ungriddedLBound(:)
      integer,                   allocatable  :: ungriddedUBound(:)
      type(ESMF_StaggerLoc)                   :: staggerloc
+     type(ESMF_MeshLoc)                      :: meshloc
      character(len=80)                       :: attName
      character(len=80),         allocatable  :: attNameList(:),attNameList2(:)
      type(ESMF_TypeKind_Flag),  allocatable  :: typekindList(:)
@@ -1109,6 +1112,8 @@
              call ESMF_AttributeSet(fieldbundle, convention="NetCDF", purpose="FV3-nooutput", name="output_grid", value="cubed_sphere_grid", rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+             wrt_geomtype = ESMF_GEOMTYPE_GRID
+
            else if (fcstItemNameList(i)(1:8) == 'restart_') then
              ! If this is a 'restart' bundle the actual grid that the output field ('field_work' below) is created on
              ! must be the same grid as forecast grid, not the output grid for this grid_id (wrtGrid(grid_id)).
@@ -1128,6 +1133,8 @@
 
                wrt_geomtype = ESMF_GEOMTYPE_GRID
              else if (fcst_geomtype == ESMF_GEOMTYPE_MESH) then
+#ifdef MPASMODEL
+#if 0
                ! create a mesh from fcstMesh on forecast grid comp, by rebalancing distgrid to the local PETs
                ! access the acceptor DistGrid
                call ESMF_MeshGet(fcstMesh, elementDistgrid=acceptorElemDG, nodalDistgrid=acceptorNodalDG, rc=rc)
@@ -1141,6 +1148,16 @@
 
                actualWrtMesh = ESMF_MeshCreate(fcstMesh, elementDistgrid=newAcceptorElemDG, nodalDistgrid=newAcceptorNodalDG, rc=rc)
                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#else
+               ! create mpas mesh on the WGC by reading init and partition file
+               call create_mpas_esmf_mesh_from_file(actualWrtMesh, wrt_int_state%petcount, wrt_int_state%mype, "init.nc", "graph.info.part.2", rc)
+               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#endif
+               wrt_geomtype = ESMF_GEOMTYPE_MESH
+#else
+               call ESMF_LogSetError(ESMF_RC_ARG_BAD, msg="Mesh supported only for MPASMODEL", line=__LINE__, file=__FILE__)
+               return
+#endif
              else
                call ESMF_LogSetError(ESMF_RC_ARG_BAD, msg="Only Grid or Mesh supported in fcstState.", line=__LINE__, file=__FILE__)
                return
@@ -1152,6 +1169,7 @@
              actualWrtGrid = wrtGrid(grid_id)
              call ESMF_AttributeSet(fieldbundle, convention="NetCDF", purpose="FV3-nooutput", name="output_grid", value=output_grid(grid_id), rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+             wrt_geomtype = ESMF_GEOMTYPE_GRID
            end if
 
            call ESMF_GridAddItem(actualWrtGrid, itemflag=ESMF_GRIDITEM_MASK,   &
@@ -1160,7 +1178,7 @@
 
            do j=1, fieldCount
 
-             call ESMF_FieldGet(fcstField(j), typekind=typekind, dimCount=fieldDimCount, geomDimCount=fieldGeomDimCount, name=fieldName, rc=rc)
+             call ESMF_FieldGet(fcstField(j), rank=rank, typekind=typekind, dimCount=fieldDimCount, geomDimCount=fieldGeomDimCount, name=fieldName, rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
              call ESMF_GridGet(actualWrtGrid, dimCount=gridDimCount, rc=rc) ! use actualWrtGrid instead of wrtGrid(grid_id)
@@ -1176,6 +1194,7 @@
              call ESMF_FieldGet(fcstField(j), ungriddedLBound=ungriddedLBound, ungriddedUBound=ungriddedUBound, rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+           if (wrt_geomtype == ESMF_GEOMTYPE_GRID) then
 #ifdef FV3
              call ESMF_FieldGet(fcstField(j), staggerloc=staggerloc, rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
@@ -1196,6 +1215,24 @@
                                            ungriddedLBound=ungriddedLBound,   &
                                            ungriddedUBound=ungriddedUBound, rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+           else if (wrt_geomtype == ESMF_GEOMTYPE_MESH) then
+
+             call ESMF_FieldGet(fcstField(j), meshloc=meshloc, rc=rc)
+             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+             gridToFieldMap=(/rank/)
+             ! write(0,*)' ESMF_FieldCreate on mesh: ', trim(fieldName), ' rank = ', rank, 'gridToFieldMap =', gridToFieldMap, ungriddedLBound, ungriddedUBound
+             field_work = ESMF_FieldCreate(actualWrtMesh, typekind, name=fieldName, &
+                                           meshloc=meshloc,      &
+                                           gridToFieldMap=gridToFieldMap,     &
+                                           ungriddedLBound=ungriddedLBound,   &
+                                           ungriddedUBound=ungriddedUBound, rc=rc)
+             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+           else
+               call ESMF_LogSetError(ESMF_RC_ARG_BAD, msg="Only Grid or Mesh supported in fcstState.", line=__LINE__, file=__FILE__)
+               return
+           endif
 
              call init_field_to_missing_value(field_work, rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
@@ -1897,6 +1934,7 @@
 
      type(ESMF_Grid)                       :: src_grid, dst_grid
      type(ESMF_Field)                      :: dst_field_mask
+     type(ESMF_GeomType_Flag)              :: geomtype
 !
 !-----------------------------------------------------------------------
 !***********************************************************************
@@ -2501,19 +2539,21 @@
 
   !
   ! set the time Attribute on the grid to carry it into the lower levels
-            call ESMF_FieldBundleGet(file_bundle, grid=fbgrid, rc=rc)
-
+            call ESMF_FieldBundleGet(file_bundle, geomtype=geomtype, rc=rc)
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-            call ESMF_AttributeSet(fbgrid, convention="NetCDF", purpose="FV3", &
-                                 name="time", value=nfhour, rc=rc)
+            if (geomtype == ESMF_GEOMTYPE_GRID) then
+              call ESMF_FieldBundleGet(file_bundle, grid=fbgrid, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              call ESMF_AttributeSet(fbgrid, convention="NetCDF", purpose="FV3", &
+                                   name="time", value=nfhour, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-            call ESMF_AttributeSet(fbgrid, convention="NetCDF", purpose="FV3", &
-                                 name="time_iso", value=trim(time_iso), rc=rc)
-
-            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              call ESMF_AttributeSet(fbgrid, convention="NetCDF", purpose="FV3", &
+                                   name="time_iso", value=trim(time_iso), rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+            end if
 
   !*** write out grid bundle:
   ! Provide log message indicating which wrtComp is active
@@ -2540,35 +2580,45 @@
 #endif
               ! restart bundles are always on forecast grid, either cubed sphere or regional/nest
 
-              call ESMF_FieldBundleGet(wrt_int_state%wrtFB(nbdl), grid=grid, rc=rc)
-              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-              call ESMF_GridGet(grid, tileCount=tileCount, rc=rc)
+              call ESMF_FieldBundleGet(wrt_int_state%wrtFB(nbdl), geomtype=geomtype, rc=rc)
               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-              if (tileCount == 6) then ! restart bundle is on cubed sphere
+              if (geomtype == ESMF_GEOMTYPE_GRID) then
+
+                call ESMF_FieldBundleGet(wrt_int_state%wrtFB(nbdl), grid=grid, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                call ESMF_GridGet(grid, tileCount=tileCount, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+                if (tileCount == 6) then ! restart bundle is on cubed sphere
 #ifdef USE_ESMF_IO
-                call ESMFproto_FieldBundleWrite(gridFB, filename=trim(filename),               &
-                                                convention="NetCDF", purpose="FV3",            &
-                                                status=ESMF_FILESTATUS_REPLACE,                &
-                                                state=stateGridFB, comps=compsGridFB,rc=rc)
-                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                  call ESMFproto_FieldBundleWrite(gridFB, filename=trim(filename),               &
+                                                  convention="NetCDF", purpose="FV3",            &
+                                                  status=ESMF_FILESTATUS_REPLACE,                &
+                                                  state=stateGridFB, comps=compsGridFB,rc=rc)
+                  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-                call ESMFproto_FieldBundleWrite(wrt_int_state%wrtFB(nbdl),                     &
-                                                filename=trim(filename), convention="NetCDF",  &
-                                                purpose="FV3", status=ESMF_FILESTATUS_OLD,     &
-                                                timeslice=step, state=optimize(nbdl)%state,    &
-                                                comps=optimize(nbdl)%comps, rc=rc)
-                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                  call ESMFproto_FieldBundleWrite(wrt_int_state%wrtFB(nbdl),                     &
+                                                  filename=trim(filename), convention="NetCDF",  &
+                                                  purpose="FV3", status=ESMF_FILESTATUS_OLD,     &
+                                                  timeslice=step, state=optimize(nbdl)%state,    &
+                                                  comps=optimize(nbdl)%comps, rc=rc)
+                  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 #else
-                call write_restart_netcdf(wrt_int_state%wrtFB(nbdl), trim(filename), &
-                                          .false., wrt_mpi_comm, mype, &
-                                          rc=rc)
+                  call write_restart_netcdf(wrt_int_state%wrtFB(nbdl), trim(filename), &
+                                            .false., wrt_mpi_comm, mype, &
+                                            rc=rc)
 #endif
-              else
-                call write_restart_netcdf(wrt_int_state%wrtFB(nbdl), trim(filename), &
-                                          .false., wrt_mpi_comm, mype, &
-                                          rc=rc)
-              endif ! cubed sphere vs. regional/nest write grid
+                else
+                  call write_restart_netcdf(wrt_int_state%wrtFB(nbdl), trim(filename), &
+                                            .false., wrt_mpi_comm, mype, &
+                                            rc=rc)
+                endif ! cubed sphere vs. regional/nest write grid
+
+              else if (geomtype == ESMF_GEOMTYPE_MESH) then
+
+                !FIXME
+              endif
 
               restart_written = .true.
 
@@ -4739,12 +4789,15 @@
         integer dimCount, rank
         type(ESMF_TypeKind_Flag) typekind
         character(len=ESMF_MAXSTR) fieldName
+        real(ESMF_KIND_R4), dimension(:),       pointer  :: ptr1d_r4
         real(ESMF_KIND_R4), dimension(:,:),     pointer  :: ptr2d_r4
         real(ESMF_KIND_R4), dimension(:,:,:),   pointer  :: ptr3d_r4
         real(ESMF_KIND_R4), dimension(:,:,:,:), pointer  :: ptr4d_r4
+        real(ESMF_KIND_R8), dimension(:),       pointer  :: ptr1d_r8
         real(ESMF_KIND_R8), dimension(:,:),     pointer  :: ptr2d_r8
         real(ESMF_KIND_R8), dimension(:,:,:),   pointer  :: ptr3d_r8
         real(ESMF_KIND_R8), dimension(:,:,:,:), pointer  :: ptr4d_r8
+        integer(ESMF_KIND_I4), dimension(:),       pointer  :: ptr1d_i4
         integer(ESMF_KIND_I4), dimension(:,:),     pointer  :: ptr2d_i4
         integer(ESMF_KIND_I4), dimension(:,:,:),   pointer  :: ptr3d_i4
         integer(ESMF_KIND_I4), dimension(:,:,:,:), pointer  :: ptr4d_i4
@@ -4758,7 +4811,11 @@
 
         ! Only work on ESMF_TYPEKIND_R4 fields for now
         if (typekind == ESMF_TYPEKIND_R4) then
-          if (dimCount == 2) then
+          if (dimCount == 1) then
+            call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr1d_r4, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
+            ptr1d_r4 = missing_value_r4
+          else if (dimCount == 2) then
             call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr2d_r4, rc=rc)
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
             ptr2d_r4 = missing_value_r4
@@ -4775,7 +4832,11 @@
             stop
           endif
         else if (typekind == ESMF_TYPEKIND_R8) then
-          if (dimCount == 2) then
+          if (dimCount == 1) then
+            call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr1d_r8, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
+            ptr1d_r8 = missing_value_r8
+          else if (dimCount == 2) then
             call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr2d_r8, rc=rc)
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
             ptr2d_r8 = missing_value_r8
@@ -4792,7 +4853,11 @@
             stop
           endif
         else if (typekind == ESMF_TYPEKIND_I4) then
-          if (dimCount == 2) then
+          if (dimCount == 1) then
+            call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr1d_i4, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
+            ptr1d_i4 = missing_value_i4
+          else if (dimCount == 2) then
             call ESMF_FieldGet(field, localDe=0, farrayPtr=ptr2d_i4, rc=rc)
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return  ! bail out
             ptr2d_i4 = missing_value_i4

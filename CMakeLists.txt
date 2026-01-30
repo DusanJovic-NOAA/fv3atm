@@ -267,6 +267,7 @@ if (MPASMODEL)
     mpasmodel/module_mpasmodel_config.F90
     mpasmodel/module_fcst_grid_comp.F90
     mpasmodel/ufs_mpas_wgc_output.F90
+    mpasmodel/mpas_esmf_mesh.F90
     ${coupling_srcs}
     ${io_srcs}
     io/module_mpas_write_history.F90
