@@ -242,6 +242,7 @@
      integer                                 :: grid_id
 
      logical                    :: history_file_on_native_grid
+     character(len=256)         :: init_filename, graph_info_part_filename
 !
 !-----------------------------------------------------------------------
 !***********************************************************************
@@ -1150,7 +1151,9 @@
                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 #else
                ! create mpas mesh on the WGC by reading init and partition file
-               call create_mpas_esmf_mesh_from_file(actualWrtMesh, wrt_int_state%petcount, wrt_int_state%mype, "init.nc", "graph.info.part.2", rc)
+               init_filename = 'init.nc'
+               write(graph_info_part_filename,'(A,I0)') 'graph.info.part.', ntasks
+               call create_mpas_esmf_mesh_from_file(actualWrtMesh, wrt_int_state%petcount, wrt_int_state%mype, trim(init_filename), trim(graph_info_part_filename), rc)
                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 #endif
                wrt_geomtype = ESMF_GEOMTYPE_MESH
