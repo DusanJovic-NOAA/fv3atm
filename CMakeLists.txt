@@ -271,6 +271,7 @@ if (MPASMODEL)
     ${coupling_srcs}
     ${io_srcs}
     io/module_mpas_write_history.F90
+    io/module_write_mpas_restart_field_bundle_pio.F90
     )
   add_dependencies(${DYCORE_TARGET} mpas)
 else()

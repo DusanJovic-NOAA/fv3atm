@@ -51,6 +51,7 @@
      use module_write_restart_netcdf, only : write_restart_netcdf
 #ifdef MPASMODEL
      use module_mpas_write_history, only : mpas_write_history
+     use module_write_mpas_restart_field_bundle_pio, only : write_mpas_restart_field_bundle_pio
      use mpas_esmf_mesh,            only : create_mpas_esmf_mesh_from_file
 #endif
 #ifndef MPASMODEL
@@ -1900,9 +1901,12 @@
 !
      character(esmf_maxstr)                :: filename,compname,wrtFBName,traceString
      character(40)                         :: cfhour, cform
-     character(20)                         :: time_iso
-     character(15)                         :: time_restart
+     character(20)                         :: time_iso     ! "YYYY-MM-DDThh:mm:ssZ"
+     character(19)                         :: xtime        ! "YYYY-MM-DD_hh:mm:ss"
+     character(15)                         :: time_restart ! "YYYYMMDD.hhmmss"
      character(15)                         :: tile_id
+
+     real                                  :: seconds_since_start
 !
      type(ESMF_Grid)                       :: grid
      type(ESMF_Info)                       :: info
@@ -2619,8 +2623,32 @@
                 endif ! cubed sphere vs. regional/nest write grid
 
               else if (geomtype == ESMF_GEOMTYPE_MESH) then
+#ifdef MPASMODEL
+                ! We need to pass two time related variables, since they are passed to
+                ! the WGC via Info, they are not updated during model execution
+                !
+                !     char xtime(Time, StrLen) ;
+                !         xtime:units = "YYYY-MM-DD_hh:mm:ss" ;
+                !         xtime:long_name = "Model valid time" ;
+                !     float Time(Time) ;
+                !         Time:units = "seconds since 2025-11-20 00:00:00" ;
+                !         Time:long_name = "CF-compliant valid time" ;
+                !         Time:standard_name = "time" ;
 
-                !FIXME
+                write(xtime,'(I4,"-",I2.2,"-",I2.2,"_",I2.2,":",I2.2,":",I2.2)') cdate(1:6)
+
+                seconds_since_start = nfhour * 3600.0
+                call write_mpas_restart_field_bundle_pio(wrt_int_state%wrtFB(nbdl), &
+                                                         trim(filename),            &
+                                                         wrt_mpi_comm,              &
+                                                         mype,                      &
+                                                         xtime,                     &
+                                                         seconds_since_start,       &
+                                                         rc=rc)
+#else
+               call ESMF_LogSetError(ESMF_RC_ARG_BAD, msg="Mesh supported only for MPASMODEL", line=__LINE__, file=__FILE__)
+               return
+#endif
               endif
 
               restart_written = .true.
