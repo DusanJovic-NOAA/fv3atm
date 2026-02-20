@@ -28,6 +28,8 @@ module ufs_mpas_wgc_output
   public :: ufs_mpas_update_history_bundle
 
   public :: ufs_mpas_create_restart_bundle
+  public :: ufs_mpas_update_restart_bundle
+
 contains
 
  subroutine ufs_mpas_create_history_bundle(output_bundle, output_vars, interp_method, rc)
@@ -137,7 +139,7 @@ contains
    do n = 1, size(output_vars)
       field_name = trim(adjustl(output_vars(n)))
 
-      call mpas_log_write('Inquiring field information for "' // trim(adjustl(field_name)) // '"')
+      call mpas_log_write('Inquiring field information for "' // trim(field_name) // '"')
 
       call mpas_pool_get_field_info(allFields, trim(field_name), mpas_pool_field_info)
 
@@ -161,7 +163,7 @@ contains
             dimNames(1:nDims) = field_1d_integer % dimNames
             block => field_1d_integer % block
 
-            field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_I4, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
+            field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_I4, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(field_name), rc=rc); ESMF_ERR(rc)
             call ESMF_FieldGet(field, farrayPtr=ptr_i4_d1, rc=rc); ESMF_ERR(rc)
             ptr_i4_d1 = field_1d_integer%array(1:nCellsSolve)
 
@@ -175,7 +177,7 @@ contains
             block => field_2d_integer % block
 
             field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_I4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(field_2d_integer%array,dim=1)], &
-                                     meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
+                                     meshloc=ESMF_MESHLOC_ELEMENT, name=trim(field_name), rc=rc); ESMF_ERR(rc)
             call ESMF_FieldGet(field, farrayPtr=ptr_i4_d2, rc=rc); ESMF_ERR(rc)
             ptr_i4_d2 = field_2d_integer%array(:,1:nCellsSolve)
 
@@ -195,8 +197,8 @@ contains
             dimNames(1:nDims) = field_1d_real % dimNames
             block => field_1d_real % block
 
-            if (trim(dimNames(1)) == 'nCells') then
-                field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
+            if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
+                field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(field_name), rc=rc); ESMF_ERR(rc)
                 call ESMF_FieldGet(field, farrayPtr=ptr_r4_d1, rc=rc); ESMF_ERR(rc)
                 ptr_r4_d1 = field_1d_real%array(1:nCellsSolve)
             else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
@@ -204,7 +206,7 @@ contains
                 call ESMF_FieldGet(field, farrayPtr=ptr_r4_d1, rc=rc); ESMF_ERR(rc)
                 ptr_r4_d1 = field_1d_real%array(1:nVerticesSolve)
             else
-                write(0,*)'Unsupported dim: ', trim(dimNames(1))
+                if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims)), ' ', trim(field_name)
             end if
 
             call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
@@ -220,16 +222,16 @@ contains
 
             if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
                 field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(field_2d_real%array,dim=1)], &
-                                         meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
+                                         meshloc=ESMF_MESHLOC_ELEMENT, name=trim(field_name), rc=rc); ESMF_ERR(rc)
                 call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
                 ptr_r4_d2 = field_2d_real%array(:,1:nCellsSolve)
             else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
                 field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(field_2d_real%array,dim=1)], &
-                                         meshloc=ESMF_MESHLOC_NODE, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
+                                         meshloc=ESMF_MESHLOC_NODE, name=trim(field_name), rc=rc); ESMF_ERR(rc)
                 call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
                 ptr_r4_d2 = field_2d_real%array(:,1:nVerticesSolve)
             else
-                write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims))
+                if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims))
             end if
 
             call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
@@ -267,7 +269,7 @@ contains
 
                dimNames(1:nDims) = field_3d_real % dimNames
                field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/3/), ungriddedLBound=[1,1], ungriddedUBound=[size(field_3d_real%array,dim=1), size(field_3d_real%array,dim=2)], &
-                                        meshloc=ESMF_MESHLOC_ELEMENT, name=trim(output_vars(n)), rc=rc); ESMF_ERR(rc)
+                                        meshloc=ESMF_MESHLOC_ELEMENT, name=trim(field_name), rc=rc); ESMF_ERR(rc)
                call ESMF_FieldGet(field, farrayPtr=ptr_r4_d3, rc=rc); ESMF_ERR(rc)
                ptr_r4_d3 = field_3d_real%array(:,:,1:nCellsSolve)
 
@@ -287,7 +289,7 @@ contains
       end select
 
       if (.not. isVarArray) then
-         call add_field_to_bundle(output_vars(n), attLists(1) % attList)
+         call add_field_to_bundle(field_name, attLists(1) % attList)
       end if
 
    end do
@@ -493,7 +495,7 @@ contains
             else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
                ptr_r4_d1 = field_1d_real%array(1:nVerticesSolve)
             else
-               write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims))
+               if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims)), ' ', trim(field_name)
             end if
             nullify(field_1d_real)
          case (2)
@@ -506,7 +508,7 @@ contains
             else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
                ptr_r4_d2 = field_2d_real%array(:,1:nVerticesSolve)
             else
-               write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims))
+               if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims)), ' ', trim(field_name)
             end if
             nullify(field_2d_real)
 
@@ -523,7 +525,7 @@ contains
                   else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
                      ptr_r4_d2 = field_3d_real%array(k,:,1:nVerticesSolve)
                   else
-                     write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims))
+                     if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims)), ' ', trim(field_name)
                   end if
                end do ! k = 1, size(field_3d_real % constituentNames)
             else
@@ -534,7 +536,7 @@ contains
                else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
                   ptr_r4_d3 = field_3d_real%array(:,:,1:nVerticesSolve)
                else
-                  write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims))
+                  if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims)), ' ', trim(field_name)
                end if
             end if
             nullify(field_3d_real)
@@ -557,7 +559,6 @@ contains
    use mpas_stream_list,   only : MPAS_stream_list_query
    use mpas_log,           only : mpas_log_write
    use mpas_pool_routines, only : pool_print_members
-
 
    use mpas_attlist,       only : att_list_type, att_lists_type, &
                                   MPAS_ATT_INT, MPAS_ATT_INTA, MPAS_ATT_REAL,MPAS_ATT_REALA, MPAS_ATT_TEXT
@@ -621,7 +622,7 @@ contains
    integer :: err_level
 
    type (block_type), pointer :: block => null()
-   character (len=StrKIND), dimension(5+1) :: dimNames ! +1 fot Time
+   character (len=StrKIND), dimension(5+1) :: dimNames ! +1 for Time
    type (att_list_type), pointer :: att_cursor => null()
    type (att_lists_type), dimension(:), pointer :: attLists => null()
    integer :: i, j, k, total_unique, nDims, dimSize
@@ -630,8 +631,6 @@ contains
    logical :: is_unique
    logical :: isVarArray
    character (len=8) :: typeName
-   ! integer :: frestart(999) = -1
-   integer :: frestart(9) = -1 ! FIXME
    character(len=64) :: decomp_dim_name
    character(len=64), allocatable :: dimension_names(:)
    character(len=64) :: variable_names(3000)
@@ -650,9 +649,6 @@ contains
    character(*), parameter :: subname = 'dyn_mpas_subdriver::ufs_mpas_create_restart_bundle'
 
    rc = 0
-
-   frestart(1) = 3600
-   frestart(2) = 7200
 
    ! Look at 'restart' stream
    nullify(stream)
@@ -1198,7 +1194,6 @@ contains
 
    ! bundle attributes
    call ESMF_InfoSet(bundle_info, key="/NetCDF/FV3/grid_id", value=1, rc=rc); ESMF_ERR(rc)
-   call ESMF_InfoSet(bundle_info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
    call ESMF_InfoSet(bundle_info, key="/NetCDF/FV3-nooutput/output_grid", value='restart_grid', rc=rc); ESMF_ERR(rc)
 
    call postwrite_reindex(allFields, stream % field_pool)
@@ -1535,5 +1530,251 @@ contains
                           rc=rc); ESMF_ERR(rc)
 
  end subroutine ufs_mpas_get_esmf_mesh
+
+ subroutine ufs_mpas_update_restart_bundle(output_bundle, rc)
+
+   use mpas_derived_types, only : mpas_pool_field_info_type, mpas_pool_real, mpas_pool_integer, &
+                                  mpas_stream_list_type, mpas_pool_type, mpas_pool_iterator_type, &
+                                  MPAS_POOL_CONFIG, MPAS_POOL_REAL, MPAS_POOL_INTEGER, MPAS_POOL_CHARACTER, &
+                                  field5DReal, field4DReal, field3DReal, field2DReal, field1DReal, field0DReal, &
+                                  field3DInteger, field2DInteger, field1DInteger, field0DInteger, field1DChar, field0DChar
+
+   use mpas_pool_routines, only : pool_print_members, mpas_pool_get_field, mpas_pool_get_field_info, mpas_pool_get_subpool, &
+                                  mpas_pool_get_next_member, mpas_pool_begin_iteration
+   use mpas_stream_manager,only : prewrite_reindex, postwrite_reindex
+   use mpas_stream_list,   only : MPAS_stream_list_query
+   use mpas_log,           only : mpas_log_write
+
+   type(ESMF_FieldBundle), intent(inout) :: output_bundle
+   integer, intent(out) :: rc
+
+   character(*), parameter :: subname = 'dyn_mpas_subdriver::ufs_mpas_update_restart_array_bundle'
+
+   type(ESMF_Field), allocatable :: arrayList(:)
+   type(ESMF_Field) :: field
+   type(ESMF_Info) :: bundle_info
+
+   character(64) :: field_name
+   type(mpas_pool_field_info_type) :: mpas_pool_field_info
+   type(mpaS_stream_list_type), pointer :: stream
+   type(mpas_pool_iterator_type) :: itr
+
+   real(RKIND), pointer           :: ptr_rm_d1(:), ptr_rm_d2(:,:), ptr_rm_d3(:,:,:) ! Default MPAS real kind
+   integer(ESMF_KIND_I4), pointer :: ptr_i4_d1(:), ptr_i4_d2(:,:), ptr_i4_d3(:,:,:)
+
+   integer :: i,j,k,n, ierr
+   integer :: localpet
+   integer :: dimCount, rank
+   type(ESMF_TypeKind_Flag) :: typekind
+   character(len=ESMF_MAXSTR) :: fieldName
+   logical :: IsPresent
+   type (mpas_pool_type), pointer :: statePool
+   type (MPAS_Pool_type), pointer :: allFields
+   type (MPAS_Pool_type), pointer :: allPackages
+   integer :: timeLevelIn = 1
+
+   type (mpas_pool_field_info_type) :: info
+   integer :: timeLevel
+
+   type (field5DReal), pointer :: real5d
+   type (field4DReal), pointer :: real4d
+   type (field3DReal), pointer :: real3d
+   type (field2DReal), pointer :: real2d
+   type (field1DReal), pointer :: real1d
+   type (field0DReal), pointer :: real0d
+
+   type (field3DInteger), pointer :: int3d
+   type (field2DInteger), pointer :: int2d
+   type (field1DInteger), pointer :: int1d
+   type (field0DInteger), pointer :: int0d
+
+   type (field1DChar), pointer :: char1d
+   type (field0DChar), pointer :: char0d
+
+   rc = 0
+
+   ! Look at 'restart' stream
+   nullify(stream)
+   if (.not. MPAS_stream_list_query(domain_ptr % streamManager % streams, 'restart', stream, ierr=ierr)) then
+      rc = 1
+      return
+   endif
+
+   allFields => domain_ptr % streamManager % allFields
+   allPackages => domain_ptr % streamManager % allPackages
+
+   call prewrite_reindex(allFields, allPackages, stream % field_pool, stream % field_pkg_pool)
+
+   call ESMF_InfoGetFromHost(output_bundle, info=bundle_info, rc=rc); ESMF_ERR(rc)
+
+   call mpas_pool_begin_iteration(stream % field_pool)
+   FIELD_LOOP: do while ( mpas_pool_get_next_member(stream % field_pool, itr) )
+
+       if (itr % memberType == MPAS_POOL_CONFIG) then
+
+           ! To avoid accidentally matching in case statements below...
+           info % fieldType = -1
+
+           call mpas_pool_get_field_info(allFields, itr % memberName, info)
+
+           ! Set time level to read
+           if (info % nTimeLevels >= timeLevelIn) then
+               timeLevel = timeLevelIn
+           else
+               timeLevel = 1
+           end if
+
+           fieldName = trim(itr % memberName)
+
+           select case (info % fieldType)
+               case (MPAS_POOL_REAL)
+                   select case (info % nDims)
+                       case (0)
+                           call mpas_pool_get_field(allFields, itr % memberName, real0d, timeLevel)
+                           call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), value=real0d % scalar, rc=rc); ESMF_ERR(rc)
+
+                       case (1)
+                           call mpas_pool_get_field(allFields, itr % memberName, real1d, timeLevel)
+                           if (real1d % isDecomposed) then
+                               call ESMF_FieldBundleGet(output_bundle, fieldName=fieldName, isPresent=isPresent, rc=rc); ESMF_ERR(rc)
+                               if (isPresent) then
+                                   call ESMF_FieldBundleGet(output_bundle, fieldName=fieldName, field=field, rc=rc); ESMF_ERR(rc)
+                                   call ESMF_FieldGet(field, farrayPtr=ptr_rm_d1, rc=rc); ESMF_ERR(rc)
+                                   if (trim(real1d % dimNames(1)) == 'nCells') then
+                                      ptr_rm_d1 = real1d % array(1:nCellsSolve)
+                                   else if (trim(real1d % dimNames(1)) == 'nVertices') then
+                                      ptr_rm_d1 = real1d % array(1:nVerticesSolve)
+                                   else if (trim(real1d % dimNames(1)) == 'nEdges') then
+                                      ptr_rm_d1 = real1d % array(1:nEdgesSolve)
+                                   end if
+                               else
+                                   write(0,*)'FIXME: ', trim(fieldName), ' is not present in the restart bundle'
+                               end if
+                           end if
+
+                       case (2)
+                           call mpas_pool_get_field(allFields, itr % memberName, real2d, timeLevel)
+                           if (real2d % isDecomposed) then
+                               call ESMF_FieldBundleGet(output_bundle, fieldName=fieldName, isPresent=isPresent, rc=rc); ESMF_ERR(rc)
+                               if (isPresent) then
+                                   call ESMF_FieldBundleGet(output_bundle, fieldName=fieldName, field=field, rc=rc); ESMF_ERR(rc)
+                                   call ESMF_FieldGet(field, farrayPtr=ptr_rm_d2, rc=rc); ESMF_ERR(rc)
+                                   if (trim(real2d % dimNames(2)) == 'nCells') then
+                                      ptr_rm_d2 = real2d % array(:,1:nCellsSolve)
+                                   else if (trim(real2d % dimNames(2)) == 'nVertices') then
+                                      ptr_rm_d2 = real2d % array(:,1:nVerticesSolve)
+                                   else if (trim(real2d % dimNames(2)) == 'nEdges') then
+                                      ptr_rm_d2 = real2d % array(:,1:nEdgesSolve)
+                                   end if
+                               else
+                                   write(0,*)'FIXME: ', trim(fieldName), ' is not present in the restart bundle'
+                               end if
+                           end if
+
+                       case (3)
+                           call mpas_pool_get_field(allFields, itr % memberName, real3d, timeLevel)
+
+                           if (real3d % isDecomposed) then
+                               if (real3d % isVarArray) then
+                                   do k = 1, size(real3d % constituentNames)
+                                       fieldName = trim(real3d % constituentNames(k))
+                                       call ESMF_FieldBundleGet(output_bundle, fieldName=fieldName, isPresent=isPresent, rc=rc); ESMF_ERR(rc)
+                                       if (isPresent) then
+                                           call ESMF_FieldBundleGet(output_bundle, fieldName=fieldName, field=field, rc=rc); ESMF_ERR(rc)
+                                           call ESMF_FieldGet(field, farrayPtr=ptr_rm_d2, rc=rc); ESMF_ERR(rc)
+                                           if (trim(real3d % dimNames(3)) == 'nCells') then
+                                              ptr_rm_d2 = real3d % array(k,:,1:nCellsSolve)
+                                           else if (trim(real3d % dimNames(3)) == 'nVertices') then
+                                              ptr_rm_d2 = real3d % array(k,:,1:nVerticesSolve)
+                                           else if (trim(real3d % dimNames(3)) == 'nEdges') then
+                                              ptr_rm_d2 = real3d % array(k,:,1:nEdgesSolve)
+                                           end if
+                                       else
+                                           write(0,*)'FIXME: ', trim(fieldName), ' is not present in the restart bundle'
+                                       end if
+                                   end do
+                               else
+                                   call ESMF_FieldBundleGet(output_bundle, fieldName=fieldName, isPresent=isPresent, rc=rc); ESMF_ERR(rc)
+                                   if (isPresent) then
+                                       call ESMF_FieldBundleGet(output_bundle, fieldName=fieldName, field=field, rc=rc); ESMF_ERR(rc)
+                                       call ESMF_FieldGet(field, farrayPtr=ptr_rm_d3, rc=rc); ESMF_ERR(rc)
+                                       if (trim(real3d % dimNames(3)) == 'nCells') then
+                                          ptr_rm_d3 = real3d % array(:,:,1:nCellsSolve)
+                                       else if (trim(real3d % dimNames(3)) == 'nVertices') then
+                                          ptr_rm_d3 = real3d % array(:,:,1:nVerticesSolve)
+                                       else if (trim(real3d % dimNames(3)) == 'nEdges') then
+                                          ptr_rm_d3 = real3d % array(:,:,1:nEdgesSolve)
+                                       end if
+                                   else
+                                       write(0,*)'FIXME: ', trim(fieldName), ' is not present in the restart bundle'
+                                   end if
+                               end if
+                           end if
+                       case (4)
+                           call mpas_pool_get_field(allFields, itr % memberName, real4d, timeLevel)
+                           write(0,'(A,A,A,I0,A)') 'FIXME: ',__FILE__,':',__LINE__, ' unimplemented'
+
+                       case (5)
+                           call mpas_pool_get_field(allFields, itr % memberName, real5d, timeLevel)
+                           write(0,'(A,A,A,I0,A)') 'FIXME: ',__FILE__,':',__LINE__, ' unimplemented'
+                   end select
+
+               case (MPAS_POOL_INTEGER)
+                   select case (info % nDims)
+                       case (0)
+                           call mpas_pool_get_field(allFields, itr % memberName, int0d, timeLevel)
+                           call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), value=int0d % scalar, rc=rc); ESMF_ERR(rc)
+
+                       case (1)
+                           call mpas_pool_get_field(allFields, itr % memberName, int1d, timeLevel)
+
+                           if (int1d % isDecomposed) then
+                               call ESMF_FieldBundleGet(output_bundle, fieldName=fieldName, isPresent=isPresent, rc=rc); ESMF_ERR(rc)
+                               if (isPresent) then
+                                   call ESMF_FieldBundleGet(output_bundle, fieldName=fieldName, field=field, rc=rc); ESMF_ERR(rc)
+                                   call ESMF_FieldGet(field, farrayPtr=ptr_i4_d1, rc=rc); ESMF_ERR(rc)
+                                   if (trim(int1d % dimNames(1)) == 'nCells') then
+                                      ptr_i4_d1 = int1d % array(1:nCellsSolve)
+                                   else if (trim(int1d % dimNames(1)) == 'nVertices') then
+                                      ptr_i4_d1 = int1d % array(1:nVerticesSolve)
+                                   else if (trim(int1d % dimNames(1)) == 'nEdges') then
+                                      ptr_i4_d1 = int1d % array(1:nEdgesSolve)
+                                   end if
+                               else
+                                   write(0,*)'FIXME: ', trim(fieldName), ' is not present in the restart bundle'
+                               end if
+                           else ! Array has no distributed dimension
+                               call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), values=int1d % array, rc=rc); ESMF_ERR(rc)
+                           end if
+
+                       case (2)
+                           call mpas_pool_get_field(allFields, itr % memberName, int2d, timeLevel)
+                           write(0,'(A,A,A,I0,A)') 'FIXME: ',__FILE__,':',__LINE__, ' unimplemented'
+
+                       case (3)
+                           call mpas_pool_get_field(allFields, itr % memberName, int3d, timeLevel)
+                           write(0,'(A,A,A,I0,A)') 'FIXME: ',__FILE__,':',__LINE__, ' unimplemented'
+
+                   end select
+
+               case (MPAS_POOL_CHARACTER)
+                   select case (info % nDims)
+                       case (0)
+                           call mpas_pool_get_field(allFields, itr % memberName, char0d, timeLevel)
+                           call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), value=trim(char0d % scalar), rc=rc); ESMF_ERR(rc)
+
+                       case (1)
+                           call mpas_pool_get_field(allFields, itr % memberName, char1d, timeLevel)
+                           write(0,'(A,A,A,I0,A)') 'FIXME: ',__FILE__,':',__LINE__, ' unimplemented'
+                   end select
+           end select
+
+       end if
+
+   end do FIELD_LOOP
+
+   call postwrite_reindex(allFields, stream % field_pool)
+
+ end subroutine ufs_mpas_update_restart_bundle
 
 end module ufs_mpas_wgc_output

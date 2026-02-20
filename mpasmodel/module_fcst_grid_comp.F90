@@ -18,10 +18,15 @@ module module_fcst_grid_comp
   use nuopc
 
   use mpas_subdriver
-  use mpas_derived_types, only : core_type, domain_type
 
-  use module_mpasmodel_config
-  use ufs_mpas_wgc_output
+  use module_mpasmodel_config, only : fcst_mpi_comm, dt_atmos, output_fh, quilting_restart, calendar
+
+  use module_mpasmodel_config, only : corelist, domain
+  use module_mpasmodel_config, only : nCellsSolve, nEdgesSolve, nVerticesSolve, nVertLevels
+  use module_mpasmodel_config, only : nCellsGlobal, nEdgesGlobal, nVerticesGlobal
+
+  use ufs_mpas_wgc_output, only : ufs_mpas_create_history_bundle, ufs_mpas_update_history_bundle
+  use ufs_mpas_wgc_output, only : ufs_mpas_create_restart_bundle, ufs_mpas_update_restart_bundle
 
   implicit none
   private
@@ -29,8 +34,10 @@ module module_fcst_grid_comp
   !---- model defined-types ----
   integer                        :: n_atmsteps
 
+  integer, allocatable           :: frestart(:)
+
   !----- coupled model data -----
-  integer :: calendar_type = -99
+  ! integer :: calendar_type = -99
   integer :: date_init(6)
 
   integer :: mype = 0
@@ -110,6 +117,7 @@ contains
     integer :: i, j, k, n
     type(ESMF_VM) :: VM
     type(ESMF_Time) :: CurrTime, StartTime, StopTime
+    type(ESMF_Config) :: CF
     real(kind=8) :: tbeg1
     ! integer :: initClock, io_unit, calendar_type_res, date_res(6), date_init_res(6)
     integer,dimension(6) :: date, date_end, days
@@ -122,6 +130,8 @@ contains
     type(ESMF_Info) :: info
     integer :: ngrids=1
     logical, allocatable :: is_moving(:)
+    integer                       :: num_restart_fh
+    real,dimension(:),allocatable :: restart_fh
 
     ! Initialize ESMF error message.
     rc = ESMF_SUCCESS
@@ -135,6 +145,19 @@ contains
                     petCount=fcst_ntasks, rc=rc); ESMF_ERR(rc)
     if (mype == 0) write(*,*)'in fcst_initialize, fcst_ntasks=',fcst_ntasks
 
+    CF = ESMF_ConfigCreate(rc=rc); ESMF_ERR(rc)
+
+    call ESMF_ConfigLoadFile(config=CF ,filename='model_configure' ,rc=rc); ESMF_ERR(rc)
+
+    num_restart_fh = ESMF_ConfigGetLen(config=CF, label ='restart_interval:',rc=rc); ESMF_ERR(rc)
+
+    if (num_restart_fh<=0) num_restart_fh = 1
+    allocate(restart_fh(num_restart_fh))
+    restart_fh = 0
+    call ESMF_ConfigGetAttribute(CF,valueList=restart_fh,label='restart_interval:', &
+                                 count=num_restart_fh, rc=rc); ESMF_ERR(rc)
+    if (mype == 0) print *,'restart_fh=',restart_fh
+!
     !
     ! Set atmos time.
     !
@@ -158,6 +181,10 @@ contains
     if (mype == 0) write(*,'(A,6I5)') 'in fcst_initialize, StartTime=',date_init
     if (mype == 0) write(*,'(A,6I5)') 'in fcst_initialize, CurrTime =',date
     if (mype == 0) write(*,'(A,6I5)') 'in fcst_initialize, StopTime =',date_end
+
+
+    ! Initialize frestart array
+    call init_frestart(StartTime, StopTime, num_restart_fh, restart_fh)
 
     ! #######################################################################################
     ! Initialize component models.
@@ -213,8 +240,14 @@ contains
     end if
 
     ! Restart bundle
-    call ufs_mpas_create_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
-    call ESMF_StateAdd(exportState, (/ restart_field_bundle /), rc=rc); ESMF_ERR(rc)
+    if (quilting_restart) then
+      call ufs_mpas_create_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
+
+      call ESMF_InfoGetFromHost(restart_field_bundle, info=info, rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
+
+      call ESMF_StateAdd(exportState, (/ restart_field_bundle /), rc=rc); ESMF_ERR(rc)
+    end if
 
     ngrids = 1
     allocate(is_moving(ngrids))
@@ -356,6 +389,13 @@ contains
        end if
     end if
 
+    ! Update restart bundle
+    if (quilting_restart) then
+        if (ANY(frestart(:) == seconds)) then
+            call ufs_mpas_update_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
+        end if
+    end if
+
     ! Timing info (debug mode)
     if (mype == 0) write(*,'(A,I16,A,F16.6)')'PASS(fcstRUN phase 1), n_atmsteps = ', &
                                                n_atmsteps,' time is ',mpi_wtime()-tbeg1
@@ -481,5 +521,61 @@ contains
    close(file_unit)
 
   end subroutine parse_history_list_vars
+
+  ! Same as 'fcst_time_array_setup' in fv3, but using ESMF time types instead of FMS types
+  subroutine init_frestart(Time_init, Time_end, num_restart_fh, restart_fh)
+
+    type(ESMF_Time), intent(in)                 :: Time_init, Time_end
+    integer,         intent(in)                 :: num_restart_fh
+    real, dimension(:), allocatable, intent(in) :: restart_fh
+
+    ! local variables
+    integer         :: tmpvar, i, rc
+    logical         :: freq_restart
+    type(ESMF_Time) :: Time_restart
+    type(ESMF_TimeInterval) :: Time_step_restart
+    integer         :: n_restart
+
+    ! set up forecast time array that controls when to write out restart files
+
+    ! if the second item is -1, the first number is frequency
+    freq_restart = .false.
+    if(num_restart_fh == 2) then
+      if(restart_fh(2)== -1) freq_restart = .true.
+    endif
+    if(freq_restart) then
+      if(restart_fh(1) >= 0) then
+        tmpvar = nint(restart_fh(1) * 3600)
+        call ESMF_TimeIntervalSet(Time_step_restart, s=tmpvar, rc=rc); ESMF_ERR(rc)
+        Time_restart = Time_init + Time_step_restart
+        if(restart_fh(1) > 0) then
+          n_restart = ( Time_end - Time_init ) / Time_step_restart
+          allocate(frestart(n_restart))
+          frestart(1) = tmpvar
+          i = 1
+          do while ( Time_restart + Time_step_restart <= Time_end )
+            i = i + 1
+            frestart(i) = frestart(i-1) + tmpvar
+            Time_restart = Time_restart + Time_step_restart
+          enddo
+        else
+         allocate(frestart(1))
+         frestart(1) = tmpvar
+        endif
+      endif
+    ! otherwise it is an array with forecast time at which the restart files will be written out
+    else if(num_restart_fh >= 1) then
+      allocate(frestart(num_restart_fh))
+      if(num_restart_fh == 1 .and. restart_fh(1) == 0 ) then
+        call ESMF_TimeIntervalGet(Time_end - Time_init, s=frestart(1), rc=rc); ESMF_ERR(rc)
+      else
+        do i=1,num_restart_fh
+          frestart(i) = nint(restart_fh(i) * 3600.)
+        enddo
+      endif
+    endif
+
+    if (mype == 0) print *,'frestart=',frestart(1:min(10,size(frestart)))/3600
+  end subroutine init_frestart
 
 end module  module_fcst_grid_comp
