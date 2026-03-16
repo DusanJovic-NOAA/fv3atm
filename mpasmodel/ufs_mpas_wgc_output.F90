@@ -13,7 +13,7 @@ module ufs_mpas_wgc_output
   use pio, only : PIO_int, PIO_real, PIO_double, PIO_char
 
   use mpas_derived_types, only : domain_type
-  use mpas_kind_types,    only : StrKIND, rkind
+  use mpas_kind_types,    only : StrKIND, RKIND, R4KIND, R8KIND
 
   use module_mpasmodel_config, only : nVertLevels
   use module_mpasmodel_config, only : nCellsGlobal, nVerticesGlobal, nEdgesGlobal
@@ -588,9 +588,9 @@ contains
    type (ESMF_Mesh) :: mesh
    type (ESMF_Field) :: field
    type (ESMF_Info) :: field_info, bundle_info
+   type (ESMF_TypeKind_Flag) :: rkind_typekind ! Default ESMF real typekind that corresponds to default MPAS real kind
 
-   real(ESMF_KIND_R4), pointer    :: ptr_r4_d1(:), ptr_r4_d2(:,:), ptr_r4_d3(:,:,:)
-   real(ESMF_KIND_R8), pointer    :: ptr_r8_d1(:), ptr_r8_d2(:,:), ptr_r8_d3(:,:,:)
+   real(RKIND), pointer           :: ptr_rm_d1(:), ptr_rm_d2(:,:), ptr_rm_d3(:,:,:) ! Default MPAS real kind
    integer(ESMF_KIND_I4), pointer :: ptr_i4_d1(:), ptr_i4_d2(:,:), ptr_i4_d3(:,:,:)
 
    type (MPAS_Pool_iterator_type) :: itr
@@ -657,18 +657,19 @@ contains
       return
    end if
 
-   ! write(0,*)'stream filename = ',trim(stream % filename)
-   ! write(0,*)'stream filename_template = ',trim(stream % filename_template)
-   ! write(0,*)'stream filename_interval = ',trim(stream % filename_interval)
-
-   ! call mpas_log_write('   allfields:')
-   ! call pool_print_members(domain_ptr % blocklist % allfields)
-   ! call mpas_log_write('---------------')
-
    allFields => domain_ptr % streamManager % allFields
    allPackages => domain_ptr % streamManager % allPackages
    timeLevelIn = 1
 
+   if (RKIND == R4KIND) then
+       rkind_typekind = ESMF_TYPEKIND_R4
+   else if (RKIND == R8KIND) then
+       rkind_typekind = ESMF_TYPEKIND_R8
+   else
+       write(0,*)'Unrecognized RKIND'
+       rc = 1
+       return
+   end if
 
    output_bundle = ESMF_FieldBundleCreate(name='restart_mpas', rc=rc); ESMF_ERR(rc)
 
@@ -742,7 +743,11 @@ contains
                        block => real0d % block
 
                        call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), value=real0d % scalar, rc=rc); ESMF_ERR(rc)
+                       if (RKIND == R4KIND) then
                        call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_real, rc=rc); ESMF_ERR(rc)
+                       else if (RKIND == R8KIND) then
+                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_double, rc=rc); ESMF_ERR(rc)
+                       end if
                        call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
 
                    case (1)
@@ -753,29 +758,33 @@ contains
                        block => real1d % block
 
                        if (trim(dimNames(info%nDims)) == 'nCells') then
-                           field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_FieldGet(field, farrayPtr=ptr_r4_d1, rc=rc); ESMF_ERR(rc)
-                           ptr_r4_d1 = real1d % array(1:nCellsSolve)
+                           field = ESMF_FieldCreate(mesh, rkind_typekind, meshloc=ESMF_MESHLOC_ELEMENT, name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
+                           call ESMF_FieldGet(field, farrayPtr=ptr_rm_d1, rc=rc); ESMF_ERR(rc)
+                           ptr_rm_d1 = real1d % array(1:nCellsSolve)
 
                            call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
                            call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value="restart_mpas", rc=rc); ESMF_ERR(rc)
                            call ESMF_FieldBundleAdd(output_bundle,(/field/), rc=rc); ESMF_ERR(rc)
-                           nullify(ptr_r4_d1)
+                           nullify(ptr_rm_d1)
                        else if (trim(dimNames(info%nDims)) == 'nVertices') then
-                           field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, meshloc=ESMF_MESHLOC_NODE, name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_FieldGet(field, farrayPtr=ptr_r4_d1, rc=rc); ESMF_ERR(rc)
-                           ptr_r4_d1 = real1d % array(1:nVerticesSolve)
+                           field = ESMF_FieldCreate(mesh, rkind_typekind, meshloc=ESMF_MESHLOC_NODE, name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
+                           call ESMF_FieldGet(field, farrayPtr=ptr_rm_d1, rc=rc); ESMF_ERR(rc)
+                           ptr_rm_d1 = real1d % array(1:nVerticesSolve)
 
                            call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
                            call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value="restart_mpas", rc=rc); ESMF_ERR(rc)
                            call ESMF_FieldBundleAdd(output_bundle,(/field/), rc=rc); ESMF_ERR(rc)
-                           nullify(ptr_r4_d1)
+                           nullify(ptr_rm_d1)
                        else if (trim(dimNames(info%nDims)) == 'nEdges') then
                            if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(info%nDims)), ' ', trim(itr % memberName)
                            cycle FIELD_LOOP
                        else ! Field has no distributed dimension
                            call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), values=real1d % array, rc=rc); ESMF_ERR(rc)
-                           call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_real, rc=rc); ESMF_ERR(rc)
+                           if (RKIND == R4KIND) then
+                               call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_real, rc=rc); ESMF_ERR(rc)
+                           else if (RKIND == R8KIND) then
+                               call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_double, rc=rc); ESMF_ERR(rc)
+                           end if
                            call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
                        end if
 
@@ -787,25 +796,25 @@ contains
                        block => real2d % block
 
                        if (trim(dimNames(info%nDims)) == 'nCells') then
-                           field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(real2d%array,dim=1)], &
+                           field = ESMF_FieldCreate(mesh, rkind_typekind, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(real2d%array,dim=1)], &
                                                     meshloc=ESMF_MESHLOC_ELEMENT, name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
-                           ptr_r4_d2 = real2d % array(:,1:nCellsSolve)
+                           call ESMF_FieldGet(field, farrayPtr=ptr_rm_d2, rc=rc); ESMF_ERR(rc)
+                           ptr_rm_d2 = real2d % array(:,1:nCellsSolve)
 
                            call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
                            call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value="restart_mpas", rc=rc); ESMF_ERR(rc)
                            call ESMF_FieldBundleAdd(output_bundle,(/field/), rc=rc); ESMF_ERR(rc)
-                           nullify(ptr_r4_d2)
+                           nullify(ptr_rm_d2)
                        else if (trim(dimNames(info%nDims)) == 'nVertices') then
-                           field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(real2d%array,dim=1)], &
+                           field = ESMF_FieldCreate(mesh, rkind_typekind, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(real2d%array,dim=1)], &
                                                     meshloc=ESMF_MESHLOC_NODE, name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
-                           ptr_r4_d2 = real2d % array(:,1:nVerticesSolve)
+                           call ESMF_FieldGet(field, farrayPtr=ptr_rm_d2, rc=rc); ESMF_ERR(rc)
+                           ptr_rm_d2 = real2d % array(:,1:nVerticesSolve)
 
                            call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
                            call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value="restart_mpas", rc=rc); ESMF_ERR(rc)
                            call ESMF_FieldBundleAdd(output_bundle,(/field/), rc=rc); ESMF_ERR(rc)
-                           nullify(ptr_r4_d2)
+                           nullify(ptr_rm_d2)
                        else if (trim(dimNames(info%nDims)) == 'nEdges') then
                            if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(info%nDims)), ' ', trim(itr % memberName)
                            cycle FIELD_LOOP
@@ -830,25 +839,25 @@ contains
 
                            do k = 1, size(real3d % constituentNames)
                                if (trim(decomp_dim_name) == 'nCells') then
-                                   field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(real3d%array,dim=2)], &
+                                   field = ESMF_FieldCreate(mesh, rkind_typekind, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(real3d%array,dim=2)], &
                                                             meshloc=ESMF_MESHLOC_ELEMENT, name=trim(real3d % constituentNames(k)), rc=rc); ESMF_ERR(rc)
-                                   call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
-                                   ptr_r4_d2 = real3d % array(k,:,1:nCellsSolve)
+                                   call ESMF_FieldGet(field, farrayPtr=ptr_rm_d2, rc=rc); ESMF_ERR(rc)
+                                   ptr_rm_d2 = real3d % array(k,:,1:nCellsSolve)
 
                                    call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
                                    call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value="restart_mpas", rc=rc); ESMF_ERR(rc)
                                    call ESMF_FieldBundleAdd(output_bundle,(/field/), rc=rc); ESMF_ERR(rc)
-                                   nullify(ptr_r4_d2)
+                                   nullify(ptr_rm_d2)
                                else if (trim(decomp_dim_name) == 'nVertices') then
-                                   field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(real3d%array,dim=2)], &
+                                   field = ESMF_FieldCreate(mesh, rkind_typekind, gridToFieldMap = (/2/), ungriddedLBound=[1], ungriddedUBound=[size(real3d%array,dim=2)], &
                                                             meshloc=ESMF_MESHLOC_NODE, name=trim(real3d % constituentNames(k)), rc=rc); ESMF_ERR(rc)
-                                   call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
-                                   ptr_r4_d2 = real3d % array(k,:,1:nVerticesSolve)
+                                   call ESMF_FieldGet(field, farrayPtr=ptr_rm_d2, rc=rc); ESMF_ERR(rc)
+                                   ptr_rm_d2 = real3d % array(k,:,1:nVerticesSolve)
 
                                    call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
                                    call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value="restart_mpas", rc=rc); ESMF_ERR(rc)
                                    call ESMF_FieldBundleAdd(output_bundle,(/field/), rc=rc); ESMF_ERR(rc)
-                                   nullify(ptr_r4_d3)
+                                   nullify(ptr_rm_d3)
                                else if (trim(decomp_dim_name) == 'nEdges') then
                                    if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(info%nDims)), ' ', trim(itr % memberName)
                                    cycle FIELD_LOOP
@@ -913,25 +922,25 @@ contains
                        else  ! isVarArray is false
                            dimNames(1:info%nDims) = real3d % dimNames;
                            if (trim(dimNames(info%nDims)) == 'nCells') then
-                               field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/3/), ungriddedLBound=[1,1], ungriddedUBound=[size(real3d%array,dim=1), size(real3d%array,dim=2)], &
+                               field = ESMF_FieldCreate(mesh, rkind_typekind, gridToFieldMap = (/3/), ungriddedLBound=[1,1], ungriddedUBound=[size(real3d%array,dim=1), size(real3d%array,dim=2)], &
                                                         meshloc=ESMF_MESHLOC_ELEMENT, name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                               call ESMF_FieldGet(field, farrayPtr=ptr_r4_d3, rc=rc); ESMF_ERR(rc)
-                               ptr_r4_d3 = real3d % array(:,:,1:nCellsSolve)
+                               call ESMF_FieldGet(field, farrayPtr=ptr_rm_d3, rc=rc); ESMF_ERR(rc)
+                               ptr_rm_d3 = real3d % array(:,:,1:nCellsSolve)
 
                                call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
                                call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value="restart_mpas", rc=rc); ESMF_ERR(rc)
                                call ESMF_FieldBundleAdd(output_bundle,(/field/), rc=rc); ESMF_ERR(rc)
-                               nullify(ptr_r4_d3)
+                               nullify(ptr_rm_d3)
                            else if (trim(dimNames(info%nDims)) == 'nVertices') then
-                               field = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R4, gridToFieldMap = (/3/), ungriddedLBound=[1,1], ungriddedUBound=[size(real3d%array,dim=1), size(real3d%array,dim=2)], &
+                               field = ESMF_FieldCreate(mesh, rkind_typekind, gridToFieldMap = (/3/), ungriddedLBound=[1,1], ungriddedUBound=[size(real3d%array,dim=1), size(real3d%array,dim=2)], &
                                                         meshloc=ESMF_MESHLOC_NODE, name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                               call ESMF_FieldGet(field, farrayPtr=ptr_r4_d3, rc=rc); ESMF_ERR(rc)
-                               ptr_r4_d3 = real3d % array(:,:,1:nVerticesSolve)
+                               call ESMF_FieldGet(field, farrayPtr=ptr_rm_d3, rc=rc); ESMF_ERR(rc)
+                               ptr_rm_d3 = real3d % array(:,:,1:nVerticesSolve)
 
                                call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
                                call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value="restart_mpas", rc=rc); ESMF_ERR(rc)
                                call ESMF_FieldBundleAdd(output_bundle,(/field/), rc=rc); ESMF_ERR(rc)
-                               nullify(ptr_r4_d3)
+                               nullify(ptr_rm_d3)
                            else if (trim(dimNames(info%nDims)) == 'nEdges') then
                                if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(info%nDims)), ' ', trim(itr % memberName)
                                cycle FIELD_LOOP
