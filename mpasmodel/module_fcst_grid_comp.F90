@@ -25,8 +25,11 @@ module module_fcst_grid_comp
   use module_mpasmodel_config, only : nCellsSolve, nEdgesSolve, nVerticesSolve, nVertLevels
   use module_mpasmodel_config, only : nCellsGlobal, nEdgesGlobal, nVerticesGlobal
 
-  use ufs_mpas_wgc_output, only : ufs_mpas_create_history_bundle, ufs_mpas_update_history_bundle
-  use ufs_mpas_wgc_output, only : ufs_mpas_create_restart_bundle, ufs_mpas_update_restart_bundle
+  use ufs_mpas_wgc_output,     only : ufs_mpas_create_history_bundle, ufs_mpas_update_history_bundle
+  use ufs_mpas_wgc_output,     only : ufs_mpas_create_restart_bundle, ufs_mpas_update_restart_bundle
+
+  use module_cplfields,        only: nExportFields, exportFields, exportFieldsInfo, &
+                                     nImportFields, importFields, importFieldsInfo
 
   implicit none
   private
@@ -296,8 +299,27 @@ contains
     type(esmf_Clock)    :: clock
     integer,intent(out) :: rc
 
+    ! Locals
+    integer :: i
+
     ! Initialize ESMF error message.
     rc = ESMF_SUCCESS
+
+    ! importable fields:
+    do i = 1, size(importFieldsInfo)
+      call NUOPC_Advertise(importState, &
+                           StandardName=trim(importFieldsInfo(i)%name), &
+                           SharePolicyField='share', rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    end do
+
+    ! exportable fields:
+    do i = 1, size(exportFieldsInfo)
+      call NUOPC_Advertise(exportState, &
+                           StandardName=trim(exportFieldsInfo(i)%name), &
+                           SharePolicyField='share', rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    end do
 
   end subroutine fcst_advertise
 
@@ -305,13 +327,92 @@ contains
   ! Realize the ESMF forecast grid component.
   ! ###########################################################################################
   subroutine fcst_realize(fcst_comp, importState, exportState, clock, rc)
+
+    use module_cplscalars,  only : flds_scalar_name, flds_scalar_num, SetScalarField
+    use ufs_mpas_wgc_output, only : ufs_mpas_get_esmf_mesh
+
     type(esmf_GridComp) :: fcst_comp
     type(ESMF_State)    :: importState, exportState
     type(esmf_Clock)    :: clock
     integer,intent(out) :: rc
 
+    ! Locals
+    integer :: i, n
+    type(ESMF_StateIntent_Flag) :: stateintent
+    integer          :: item
+    logical          :: isConnected
+    type(ESMF_Field) :: field
+    type(ESMF_Mesh)  :: mesh
+    real(ESMF_KIND_R8) :: l_fill_value
+    real(ESMF_KIND_R8), parameter :: d_fill_value = 0._ESMF_KIND_R8
+
     ! Initialize ESMF error message.
     rc = ESMF_SUCCESS
+
+    call ufs_mpas_get_esmf_mesh(mesh, rc=rc); ESMF_ERR(rc)
+
+    call ESMF_StateGet(exportState, stateintent=stateintent, rc=rc); ESMF_ERR(rc)
+
+    if (stateintent == ESMF_STATEINTENT_EXPORT) then
+    end if
+
+    do item = 1, size(exportFieldsInfo)
+      isConnected = NUOPC_IsConnected(exportState, fieldName=trim(exportFieldsInfo(item)%name), rc=rc); ESMF_ERR(rc)
+      if (isConnected) then
+        if (trim(exportFieldsInfo(item)%name) == trim(flds_scalar_name)) then
+          ! Create the scalar field
+          call SetScalarField(field, flds_scalar_name, flds_scalar_num, rc=rc); ESMF_ERR(rc)
+        else
+          call ESMF_StateGet(exportState, field=field, itemName=trim(exportFieldsInfo(item)%name), rc=rc); ESMF_ERR(rc)
+          call ESMF_FieldEmptySet(field, mesh=mesh, meshloc=ESMF_MESHLOC_ELEMENT, rc=rc); ESMF_ERR(rc)
+
+          select case (exportFieldsInfo(item)%type)
+          ! case ('l','layer')
+          !   call ESMF_FieldEmptyComplete(field, typekind=ESMF_TYPEKIND_R8, &
+          !        ungriddedLBound=(/1/), ungriddedUBound=(/numLevels/), rc=rc); ESMF_ERR(rc)
+          ! case ('i','interface')
+          !   call ESMF_FieldEmptyComplete(field, typekind=ESMF_TYPEKIND_R8, &
+          !        ungriddedLBound=(/1/), ungriddedUBound=(/numLevels+1/), rc=rc); ESMF_ERR(rc)
+          ! case ('t','tracer')
+          !   call ESMF_FieldEmptyComplete(field, typekind=ESMF_TYPEKIND_R8, &
+          !        ungriddedLBound=(/1, 1/), ungriddedUBound=(/numLevels, numTracers/), rc=rc); ESMF_ERR(rc)
+          !   if (allocated(tracerNames)) then
+          !     call addFieldMetadata(field, 'tracerNames', tracerNames, rc=rc); ESMF_ERR(rc)
+          !   end if
+          !   if (allocated(tracerUnits)) then
+          !     call addFieldMetadata(field, 'tracerUnits', tracerUnits, rc=rc); ESMF_ERR(rc)
+          !   end if
+          case ('s','surface')
+            call ESMF_FieldEmptyComplete(field, typekind=ESMF_TYPEKIND_R8, rc=rc); ESMF_ERR(rc)
+          ! case ('g','soil')
+          !   call ESMF_FieldEmptyComplete(field, typekind=ESMF_TYPEKIND_R8, &
+          !        ungriddedLBound=(/1/), ungriddedUBound=(/numSoilLayers/), rc=rc); ESMF_ERR(rc)
+          case default
+            call ESMF_LogSetError(ESMF_RC_NOT_VALID, &
+                 msg="exportFieldType = '"//trim(exportFieldsInfo(item)%type)//"' not recognized", &
+                 line=__LINE__, file=__FILE__, rcToReturn=rc); ESMF_ERR(rc)
+            return
+          end select
+        end if
+        call NUOPC_Realize(exportState, field=field, rc=rc); ESMF_ERR(rc)
+
+        ! -- initialize field value
+        call ESMF_FieldFill(field, dataFillScheme="const", const1=l_fill_value, rc=rc); ESMF_ERR(rc)
+
+        ! -- save field
+        exportFields(item) = field
+        call ESMF_LogWrite('MPAS Export Field '//trim(exportFieldsInfo(item)%name)  &
+             // ' is connected ', ESMF_LOGMSG_INFO, line=__LINE__, file=__FILE__, rc=rc); ESMF_ERR(rc)
+      else
+        ! remove a not connected Field from State
+        call ESMF_StateRemove(exportState, (/trim(exportFieldsInfo(item)%name)/), rc=rc); ESMF_ERR(rc)
+        call ESMF_LogWrite('MPAS Export Field '//trim(exportFieldsInfo(item)%name)  &
+             // ' is not connected ', ESMF_LOGMSG_INFO, line=__LINE__, file=__FILE__, rc=rc); ESMF_ERR(rc)
+      end if
+    end do
+
+    ! -- initialize export fields if applicable
+    call setup_exportdata(rc=rc); ESMF_ERR(rc)
 
   end subroutine fcst_realize
 
@@ -419,6 +520,8 @@ contains
 
     ! Timing info (debug mode)
     tbeg1 = mpi_wtime()
+
+    call setup_exportdata(rc=rc); ESMF_ERR(rc)
 
     ! Timing info (debug mode)
     if (mype == 0) write(*,'(A,I16,A,F16.6)')'PASS(fcstRUN phase 2), n_atmsteps = ', &
@@ -577,5 +680,191 @@ contains
 
     if (mype == 0) print *,'frestart=',frestart(1:min(10,size(frestart)))/3600
   end subroutine init_frestart
+
+  subroutine setup_exportdata(rc)
+
+    use ESMF
+
+    use module_cplfields,  only : exportFields
+    use module_cplscalars, only : flds_scalar_name
+
+    use mpas_kind_types,   only : RKIND
+    use mpas_constants,    only : rvord
+
+    !--- arguments
+    integer, optional, intent(out) :: rc
+
+    !--- local variables
+    integer                :: i, j
+
+    integer                                     :: localrc
+    integer                                     :: n,rank
+    logical                                     :: isFound
+    type(ESMF_TypeKind_Flag)                    :: datatype
+    character(len=ESMF_MAXSTR)                  :: fieldName
+    real(kind=ESMF_KIND_R4), dimension(:,:), pointer   :: datar42d
+    real(kind=ESMF_KIND_R8), dimension(:), pointer     :: datar81d
+    real(kind=ESMF_KIND_R8), dimension(:,:), pointer   :: datar82d
+    real(kind=ESMF_KIND_R8), dimension(:,:,:), pointer :: datar83d
+
+    !--- local parameters
+    real(kind=ESMF_KIND_R8), parameter :: zeror8 = 0._ESMF_KIND_R8
+
+    type (mpas_pool_type), pointer :: mesh
+    type (mpas_pool_type), pointer :: state
+    type (mpas_pool_type), pointer :: diag
+    type (mpas_pool_type), pointer :: diag_physics
+    real (kind=RKIND), dimension(:),   pointer :: r_1d
+    real (kind=RKIND), dimension(:,:), pointer :: r_2d, r_2d_2
+    real (kind=RKIND), dimension(:,:), pointer :: theta_m, exner
+    real (kind=RKIND), dimension(:,:,:), pointer :: scalars
+    integer, pointer :: index_qv
+
+    !--- begin
+    if (present(rc)) rc = ESMF_SUCCESS
+
+    call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', mesh)
+    call mpas_pool_get_subpool(domain % blocklist % structs, 'state', state)
+    call mpas_pool_get_subpool(domain % blocklist % structs, 'diag', diag)
+    call mpas_pool_get_subpool(domain % blocklist % structs, 'diag_physics', diag_physics)
+
+    do n=1, size(exportFields)
+
+      datar42d => null()
+      datar81d => null()
+      datar82d => null()
+      datar83d => null()
+      r_1d => null()
+      r_2d => null()
+      r_2d_2 => null()
+
+      isFound = ESMF_FieldIsCreated(exportFields(n), rc=localrc)
+      if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+      if (isFound) then
+        call ESMF_FieldGet(exportFields(n), name=fieldname, rank=rank, typekind=datatype, rc=localrc)
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+        if (trim(fieldname) == trim(flds_scalar_name)) then
+          isFound = .false.
+        else
+          if (datatype == ESMF_TYPEKIND_R8) then
+            select case (rank)
+            case (1)
+              call ESMF_FieldGet(exportFields(n),farrayPtr=datar81d,localDE=0, rc=localrc)
+              if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+            case (2)
+              call ESMF_FieldGet(exportFields(n),farrayPtr=datar82d,localDE=0, rc=localrc)
+              if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+            case (3)
+              call ESMF_FieldGet(exportFields(n),farrayPtr=datar83d,localDE=0, rc=localrc)
+              if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+            case default
+              !--- skip field
+              isFound = .false.
+            end select
+          else if (datatype == ESMF_TYPEKIND_R4) then
+            select case (rank)
+            case (2)
+              call ESMF_FieldGet(exportFields(n),farrayPtr=datar42d,localDE=0, rc=localrc)
+              if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+            case default
+              !--- skip field
+              isFound = .false.
+            end select
+          else
+            !--- skip field
+            isFound = .false.
+          end if
+        end if
+      end if
+      ! if (isFound .and. GFS_control%cplchm) isFound = .not.any(trim(fieldname) == chemistryFieldNames)
+
+      if (isFound) then
+          select case (trim(fieldname))
+            !--- Instantaneous quantities
+            ! bottom layer zonal wind (u)
+            case('inst_zonal_wind_height_lowest')
+              call mpas_pool_get_array(diag, 'uReconstructZonal', r_2d)
+              datar81d = 0.5 * r_2d(1,1:nCellsSolve)
+              continue
+            ! bottom layer meridional wind (v)
+            case('inst_merid_wind_height_lowest')
+              call mpas_pool_get_array(diag, 'uReconstructMeridional', r_2d)
+              datar81d = 0.5 * r_2d(1,1:nCellsSolve)
+              continue
+            ! bottom layer height (z)
+            case('inst_height_lowest')
+              call mpas_pool_get_array(mesh, 'zgrid', r_2d)
+              datar81d = 0.5 * (r_2d(2,1:nCellsSolve) - r_2d(1,1:nCellsSolve))
+              continue
+            ! Instantaneous u wind (m/s) 10 m above ground
+            case ('inst_zonal_wind_height10m')
+              call mpas_pool_get_array(diag_physics, 'u10', r_1d)
+              datar81d = r_1d(1:nCellsSolve)
+              continue
+            ! Instantaneous v wind (m/s) 10 m above ground
+            case ('inst_merid_wind_height10m')
+              call mpas_pool_get_array(diag_physics, 'v10', r_1d)
+              datar81d = r_1d(1:nCellsSolve)
+            ! bottom layer temperature (t)
+            case('inst_temp_height_lowest')
+              ! calculation of temperature at cell centers
+              call mpas_pool_get_array(state, 'theta_m', theta_m, 1)
+              call mpas_pool_get_array(state, 'scalars', scalars, 1)
+              call mpas_pool_get_dimension(state, 'index_qv', index_qv)
+              call mpas_pool_get_array(diag, 'exner', exner)
+              datar81d = (theta_m(1,1:nCellsSolve)/(1._RKIND+rvord*scalars(index_qv,  1,1:nCellsSolve)))*exner(1,1:nCellsSolve)
+            ! bottom layer pressure (p)
+            case('inst_pres_height_lowest')
+              call mpas_pool_get_array(diag, 'pressure_base', r_2d)
+              call mpas_pool_get_array(diag, 'pressure_p', r_2d_2)
+              datar81d = r_2d(1,1:nCellsSolve) + r_2d_2(1,1:nCellsSolve)
+            ! Instantaneous Pressure (Pa) land and sea surface
+            case ('inst_pres_height_surface')
+              call mpas_pool_get_array(diag, 'surface_pressure', r_1d)
+              datar81d = r_1d(1:nCellsSolve)
+            case ('inst_spec_humid_height_lowest')
+              ! call mpas_pool_get_array(diag_physics, 'qsfc', r_1d)
+              call mpas_pool_get_array(diag_physics, 'q2', r_1d) ! FIXME
+              datar81d = r_1d(1:nCellsSolve)
+            case ('air_density_height_lowest')
+              call mpas_pool_get_array(diag, 'rho', r_2d)
+              datar81d = r_2d(1,1:nCellsSolve)
+            case ('inst_temp_height2m')
+              call mpas_pool_get_array(diag_physics, 't2m', r_1d)
+              datar81d = r_1d(1:nCellsSolve)
+            case ('inst_spec_humid_height2m')
+              call mpas_pool_get_array(diag_physics, 'q2', r_1d)
+              datar81d = r_1d(1:nCellsSolve)
+            case ('inst_prec_rate') ! Faxa_rain
+              call mpas_pool_get_array(diag_physics,'rainncv', r_1d)
+              datar81d = r_1d(1:nCellsSolve) / dt_atmos
+            case ('inst_fprec_rate') ! Faxa_snow
+              call mpas_pool_get_array(diag_physics,'snowncv', r_1d)
+              datar81d = r_1d(1:nCellsSolve) / dt_atmos
+            case ('inst_down_lw_flx') ! Faxa_lwdn
+              call mpas_pool_get_array(diag_physics,'glw', r_1d)
+              datar81d = r_1d(1:nCellsSolve)
+            case ('inst_down_sw_ir_dir_flx') ! Faxa_swndr
+              call mpas_pool_get_array(diag_physics,'swddir', r_1d)
+              datar81d = r_1d(1:nCellsSolve)
+            case ('inst_down_sw_ir_dif_flx') ! Faxa_swndf
+              call mpas_pool_get_array(diag_physics,'swddif', r_1d)
+              datar81d = r_1d(1:nCellsSolve)
+            case ('inst_down_sw_vis_dir_flx') ! Faxa_swvdr
+              continue
+            case ('inst_down_sw_vis_dif_flx') ! Faxa_swvdf
+              continue
+            case default
+              localrc = ESMF_RC_NOT_FOUND
+          end select
+
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg="Failure to populate exported field: "//trim(fieldname), &
+          line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+      endif
+
+    enddo ! exportFields
+
+  end subroutine setup_exportdata
 
 end module  module_fcst_grid_comp

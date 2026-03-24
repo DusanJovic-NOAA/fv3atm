@@ -24,6 +24,7 @@ module module_cplfields
 
 ! Export Fields ----------------------------------------
 
+#ifdef FV3
   ! Please specify fields as: FieldInfo("standard_name", "type")
   ! Field types should be provided according to the table below:
   !  g : soil levels (3D)
@@ -301,6 +302,46 @@ module module_cplfields
     ! "number_of_vegetation_categories ", &
     ! "fraction_of_vegetation_category "  &
     ]
+#endif
+
+
+#ifdef MPASMODEL
+  integer,          public, parameter :: NexportFields = 19 !< Total number of export fields
+  type(ESMF_Field), target, public    :: exportFields(NexportFields) !< ESMF array for export fields
+
+  !> ESMF array for export fields
+  type(FieldInfo), dimension(NexportFields), public, parameter :: exportFieldsInfo = [ &
+    FieldInfo("inst_zonal_wind_height_lowest            ", "s"), &
+    FieldInfo("inst_merid_wind_height_lowest            ", "s"), &
+    FieldInfo("inst_height_lowest                       ", "s"), &
+    FieldInfo("inst_temp_height_lowest                  ", "s"), &
+    FieldInfo("inst_pres_height_lowest                  ", "s"), &
+    FieldInfo("inst_pres_height_surface                 ", "s"), &
+    FieldInfo("inst_spec_humid_height_lowest            ", "s"), &
+    FieldInfo("air_density_height_lowest                ", "s"), &
+    FieldInfo("inst_zonal_wind_height10m                ", "s"), &
+    FieldInfo("inst_merid_wind_height10m                ", "s"), &
+    FieldInfo("inst_temp_height2m                       ", "s"), &
+    FieldInfo("inst_spec_humid_height2m                 ", "s"), &
+    FieldInfo("inst_prec_rate                           ", "s"), &
+    FieldInfo("inst_fprec_rate                          ", "s"), &
+    FieldInfo("inst_down_lw_flx                         ", "s"), &
+    FieldInfo("inst_down_sw_ir_dir_flx                  ", "s"), &
+    FieldInfo("inst_down_sw_ir_dif_flx                  ", "s"), &
+    FieldInfo("inst_down_sw_vis_dir_flx                 ", "s"), &
+    FieldInfo("inst_down_sw_vis_dif_flx                 ", "s")  &
+  ]
+
+! Import Fields ----------------------------------------
+  !> Number of import fields (IVAI: add 3 inst_tracer_diag)
+  integer,          public, parameter :: NimportFields = 0
+  !> Logicals to inidicate if field is valid
+  logical,          public            :: importFieldsValid(NimportFields)
+  !> ESMF array for import fields
+  type(ESMF_Field), target, public    :: importFields(NimportFields)
+  !> ESMF array for export fields
+  type(FieldInfo), dimension(NimportFields), public, parameter :: importFieldsInfo = [ FieldInfo :: ]
+#endif
 
   ! Methods
   public queryImportFields, queryExportFields

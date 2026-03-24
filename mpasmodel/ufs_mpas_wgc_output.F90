@@ -24,6 +24,8 @@ module ufs_mpas_wgc_output
 
   private
 
+  public :: ufs_mpas_get_esmf_mesh
+
   public :: ufs_mpas_create_history_bundle
   public :: ufs_mpas_update_history_bundle
 
