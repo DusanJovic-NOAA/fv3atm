@@ -85,14 +85,19 @@ module ufsatm_cap_mod
   type(ESMF_GridComp)                         :: fcstComp
   type(ESMF_State)                            :: fcstState
   type(ESMF_FieldBundle), allocatable         :: fcstFB(:)
+  type(ESMF_ArrayBundle), allocatable         :: fcstAB(:)
   integer,dimension(:), allocatable           :: fcstPetList
+  integer, save                               :: fcstItemCount ! = FBCount + ABCount
   integer, save                               :: FBCount
+  integer, save                               :: ABCount
 
   type(ESMF_GridComp),    allocatable         :: wrtComp(:)
   type(ESMF_State),       allocatable         :: wrtState(:)
   type(ESMF_FieldBundle), allocatable         :: wrtFB(:,:)
+  type(ESMF_ArrayBundle), allocatable         :: wrtAB(:,:)
 
   type(ESMF_RouteHandle), allocatable         :: routehandle(:,:)
+  type(ESMF_RouteHandle), allocatable         :: routehandleAB(:,:)
   type(ESMF_RouteHandle), allocatable         :: gridRedistRH(:,:)
   type(ESMF_Grid), allocatable                :: srcGrid(:,:), dstGrid(:,:)
   logical, allocatable                        :: is_moving_FB(:)
@@ -238,14 +243,14 @@ module ufsatm_cap_mod
     type(ESMF_Config)                      :: cf
     type(ESMF_RegridMethod_Flag)           :: regridmethod
 
-    integer                                :: i, j, k, urc, ist, grid_id
+    integer                                :: i, j, k, n, urc, ist, grid_id
     integer                                :: noutput_fh, nfh, nfh2
     integer                                :: petcount
     integer                                :: nfhmax_hf
     real                                   :: nfhmax
     real                                   :: output_startfh, outputfh, outputfh2(2)
     logical                                :: loutput_fh, lfreq
-    character(ESMF_MAXSTR)                 :: gc_name, fb_name
+    character(ESMF_MAXSTR)                 :: gc_name, fb_name, ab_name
     integer,dimension(:), allocatable      :: petList, originPetList, targetPetList
     character(len=esmf_maxstr),allocatable :: fcstItemNameList(:)
     type(ESMF_StateItem_Flag), allocatable :: fcstItemTypeList(:)
@@ -690,10 +695,10 @@ module ufsatm_cap_mod
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 !
 ! determine number elements in fcstState
-    call ESMF_StateGet(fcstState, itemCount=FBCount, rc=rc)
+    call ESMF_StateGet(fcstState, itemCount=fcstItemCount, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-    if(mype == 0) print *,'ufsatm_cap: field bundles in fcstComp export state, FBCount= ',FBcount
-!
+    if (mype == 0) print *,'ufsatm_cap: field/array bundles in fcstComp export state, fcstItemCount= ',fcstItemCount
+
 ! set start time for output
     output_startfh = 0.
 !
@@ -703,71 +708,115 @@ module ufsatm_cap_mod
 !-----------------------------------------------------------------------
 !
     if( quilting ) then
+
+! get all items and count how many are FieldBundles and how many are ArrayBundles
+      allocate(fcstItemNameList(fcstItemCount), fcstItemTypeList(fcstItemCount))
+
+      call ESMF_StateGet(fcstState, itemNameList=fcstItemNameList, &
+                         itemTypeList=fcstItemTypeList, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      FBCount = 0
+      ABCount = 0
+! loop over all items in the fcstState and collect all FieldBundles
+      do i=1, fcstItemCount
+        if (fcstItemTypeList(i) == ESMF_STATEITEM_FIELDBUNDLE) then
+          FBCount = FBCount + 1
+        else if (fcstItemTypeList(i) == ESMF_STATEITEM_ARRAYBUNDLE) then
+          ABCount = ABCount + 1
+        else
+            call ESMF_LogSetError(ESMF_RC_ARG_BAD,                                 &
+                                  msg="Only FieldBundles or ArrayBundles supported in fcstState.", &
+                                  line=__LINE__, file=__FILE__, rcToReturn=rc)
+            return
+        end if
+      end do
+      if (mype == 0) print *,'ufsatm_cap: number of field bundles in fcstComp export state, FBCount= ',FBCount
+      if (mype == 0) print *,'ufsatm_cap: number of array bundles in fcstComp export state, ABCount= ',ABCount
+
+
 ! query the is_moving array from the fcstState (was set by fcstComp.Initialize() above)
 #ifdef FV3
-    call ESMF_InfoGetFromHost(fcstState, info=info, rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-    call ESMF_InfoGetAlloc(info, key="is_moving", values=is_moving, rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+      call ESMF_InfoGetFromHost(fcstState, info=info, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+      call ESMF_InfoGetAlloc(info, key="is_moving", values=is_moving, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 #else
-    allocate(is_moving(1))
-    is_moving = .false.
+      allocate(is_moving(1))
+      is_moving = .false.
 #endif
-    needGridTransfer = any(is_moving)
+      needGridTransfer = any(is_moving)
 
-    allocate(is_moving_fb(FBcount))
-    is_moving_fb = .false. ! init
+      allocate(is_moving_fb(FBcount))
+      is_moving_fb = .false. ! init
 
-    write(msgString,'(A,L4)') trim(subname)//" needGridTransfer = ", needGridTransfer
-    call ESMF_LogWrite(trim(msgString), ESMF_LOGMSG_INFO, rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+      write(msgString,'(A,L4)') trim(subname)//" needGridTransfer = ", needGridTransfer
+      call ESMF_LogWrite(trim(msgString), ESMF_LOGMSG_INFO, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-    write(msgString,'(A,8L4)') trim(subname)//" is_moving = ", is_moving
-    call ESMF_LogWrite(trim(msgString), ESMF_LOGMSG_INFO, rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+      write(msgString,'(A,8L4)') trim(subname)//" is_moving = ", is_moving
+      call ESMF_LogWrite(trim(msgString), ESMF_LOGMSG_INFO, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-      allocate(fcstFB(FBCount), fcstItemNameList(FBCount), fcstItemTypeList(FBCount))
+
+      allocate(fcstFB(FBCount), fcstAB(ABCount))
       allocate(wrtComp(write_groups), wrtState(write_groups) )
-      allocate(wrtFB(FBCount,write_groups), routehandle(FBCount,write_groups))
+      allocate(wrtFB(FBCount,write_groups))
+      allocate(wrtAB(ABCount,write_groups))
+      allocate(routehandle(FBCount,write_groups))
+      allocate(routehandleAB(ABCount,write_groups))
       allocate(srcGrid(FBCount,write_groups), dstGrid(FBCount,write_groups), gridRedistRH(FBCount,write_groups))
       allocate(lead_wrttask(write_groups), last_wrttask(write_groups))
       allocate(petList(wrttasks_per_group_from_parent))
       allocate(originPetList(num_pes_fcst+wrttasks_per_group_from_parent))
       allocate(targetPetList(num_pes_fcst+wrttasks_per_group_from_parent))
-      if(mype == 0) print *,'af allco wrtComp,write_groups=',write_groups
-
-! pull out the item names and item types from fcstState
-      call ESMF_StateGet(fcstState, itemNameList=fcstItemNameList, &
-                         itemTypeList=fcstItemTypeList, &
-                        !itemorderflag=ESMF_ITEMORDER_ADDORDER, &
-                         rc=rc)
-      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
 ! loop over all items in the fcstState and collect all FieldBundles
-      do i=1, FBcount
+      n = 0
+      do i=1, fcstItemCount
         if (fcstItemTypeList(i) == ESMF_STATEITEM_FIELDBUNDLE) then
-          ! access the FieldBundle
+          n = n + 1
           call ESMF_StateGet(fcstState, itemName=fcstItemNameList(i), &
-                             fieldbundle=fcstFB(i), rc=rc)
+                             fieldbundle=fcstFB(n), rc=rc)
           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-!          if(mype==0.or.mype==144) print *,'af fcstFB,i=',i,'name=',trim(fcstItemNameList(i))
-        else
-        !***### anything but a FieldBundle in the state is unexpected here
-          call ESMF_LogSetError(ESMF_RC_ARG_BAD,                                 &
-                                msg="Only FieldBundles supported in fcstState.", &
-                                line=__LINE__, file=__FILE__, rcToReturn=rc)
-          return
-        endif
-        call ESMF_InfoGetFromHost(fcstFB(i), info=info, rc=rc)
-        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-        call ESMF_InfoGet(info, key="/NetCDF/FV3/grid_id", value=grid_id, rc=rc)
-        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-        call ESMF_InfoGetAlloc(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc)
-        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-        is_moving_fb(i) = is_moving(grid_id)
+          call ESMF_FieldBundleGet(fcstFB(n), name=fb_name, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          if (trim(fb_name) /= trim(fcstItemNameList(i))) then
+             write(0,*) 'trim(fb_name) /= trim(fcstItemNameList(i)) ', trim(fb_name), ' ', trim(fcstItemNameList(i))
+             stop ! FIXME
+          end if
+
+          call ESMF_InfoGetFromHost(fcstFB(n), info=info, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          call ESMF_InfoGet(info, key="/NetCDF/FV3/grid_id", value=grid_id, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          call ESMF_InfoGetAlloc(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          is_moving_fb(n) = is_moving(grid_id)
+        endif
       enddo
-!
+      if (mype == 0) print *,'ufsatm_cap: collected ', n, ' field bundles'
+
+! loop over all items in the fcstState and collect all ArrayBundles
+      n = 0
+      do i=1, fcstItemCount
+        if (fcstItemTypeList(i) == ESMF_STATEITEM_ARRAYBUNDLE) then
+          n = n + 1
+          call ESMF_StateGet(fcstState, itemName=fcstItemNameList(i), &
+                             arraybundle=fcstAB(n), rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          call ESMF_InfoGetFromHost(fcstAB(n), info=info, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          call ESMF_InfoGetAlloc(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        endif
+      enddo
+      if (mype == 0) print *,'ufsatm_cap: collected ', n, ' array bundles'
+
       k = num_pes_fcst
       timerhs = MPI_Wtime()
       do i=1, write_groups
@@ -827,7 +876,11 @@ module ufsatm_cap_mod
         call ESMF_AttributeCopy(fcstState, wrtState(i), attcopy=ESMF_ATTCOPY_REFERENCE, rc=rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+! Add Field and Array bundles to wrtState
         call ESMF_StateAdd(wrtState(i), fcstFB, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_StateAdd(wrtState(i), fcstAB, rc=rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
 ! call into wrtComp(i) Initialize
@@ -860,10 +913,10 @@ module ufsatm_cap_mod
           do j=1, FBcount
             if (is_moving_fb(j)) then
               ! access the fcst (provider) Grid
-              call ESMF_FieldBundleGet(fcstFB(j), grid=grid, rc=rc)
+              call ESMF_FieldBundleGet(fcstFB(j), grid=grid, name=fb_name, rc=rc)
               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
               ! access the mirror FieldBundle on the wrtComp
-              call ESMF_StateGet(wrtState(i), itemName="mirror_"//trim(fcstItemNameList(j)), fieldbundle=mirrorFB, rc=rc)
+              call ESMF_StateGet(wrtState(i), itemName="mirror_"//trim(fb_name), fieldbundle=mirrorFB, rc=rc)
               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
               ! determine whether there are fields in the mirror FieldBundle
               call ESMF_FieldBundleGet(mirrorFB, fieldCount=fieldCount, rc=rc)
@@ -904,7 +957,7 @@ module ufsatm_cap_mod
               call ESMF_FieldBundleGet(fcstFB(j), grid=providerGrid, name=fb_name, rc=rc)
               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
               ! access the mirror FieldBundle on the wrtComp
-              call ESMF_StateGet(wrtState(i), itemName="mirror_"//trim(fcstItemNameList(j)), fieldbundle=mirrorFB, rc=rc)
+              call ESMF_StateGet(wrtState(i), itemName="mirror_"//trim(fb_name), fieldbundle=mirrorFB, rc=rc)
               if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
               ! determine whether there are fields in the mirror FieldBundle
               call ESMF_FieldBundleGet(mirrorFB, fieldCount=fieldCount, rc=rc)
@@ -978,9 +1031,11 @@ module ufsatm_cap_mod
           call ESMF_AttributeGet(fcstFB(j), convention="NetCDF", purpose="FV3", name="grid_id", value=grid_id, rc=rc)
           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-          call ESMF_StateGet(wrtState(i), itemName="output_"//trim(fcstItemNameList(j)), fieldbundle=wrtFB(j,i), rc=rc)
+          call ESMF_FieldBundleGet(fcstFB(j), name=fb_name, rc=rc)
           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+          call ESMF_StateGet(wrtState(i), itemName="output_"//trim(fb_name), fieldbundle=wrtFB(j,i), rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
           call ESMF_AttributeGet(wrtFB(j,i), convention="NetCDF", purpose="FV3-nooutput", &
                                  name="output_grid", value=output_grid, isPresent=isPresent, rc=rc)
@@ -992,7 +1047,7 @@ module ufsatm_cap_mod
           needs_dst_mask = needs_dst_mask .AND. .not. (trim(output_grid) == "restart_grid" .or. trim(output_grid) == "cubed_sphere_grid") ! 3) non-native grid (non cubed_sphere_grid) history bundles
 
           if (mype == 0) then
-            write(*,'(A,I2,1X,A32, A,I2, A,A24, A,L2, A,L2 )') ' FB: ',j, fcstItemNameList(j), &
+            write(*,'(A,I2,1X,A32, A,I2, A,A24, A,L2, A,L2 )') ' FB: ',j, trim(fb_name), &
                            ' grid_id ', grid_id, &
                            ' output_grid: ', output_grid, &
                            ' is_moving: ', is_moving_fb(j), &
@@ -1002,7 +1057,7 @@ module ufsatm_cap_mod
           ! only on write group 1, RH's on groups > 1 are computed from RH on group 1
           if (needs_dst_mask .and. i==1) then
 
-            call ESMF_StateGet(wrtState(i), itemName="output_"//trim(fcstItemNameList(j)), fieldbundle=wrtFB(j,i), rc=rc)
+            call ESMF_StateGet(wrtState(i), itemName="output_"//trim(fb_name), fieldbundle=wrtFB(j,i), rc=rc)
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
             call ESMF_FieldBundleGet(wrtFB(j,i), grid=dst_grid, rc=rc)
@@ -1048,7 +1103,7 @@ module ufsatm_cap_mod
             ! this is a moving domain -> use a static Redist() to move data to wrtComp(:)
             ! access the mirror FieldBundle in the wrtState(i)
             call ESMF_StateGet(wrtState(i), &
-                               itemName="mirror_"//trim(fcstItemNameList(j)), &
+                               itemName="mirror_"//trim(fb_name), &
                                fieldbundle=wrtFB(j,i), rc=rc)
             if (i==1) then
               ! this is a Store() for the first wrtComp -> must do the Store()
@@ -1073,9 +1128,9 @@ module ufsatm_cap_mod
             ! this is a static domain -> do Regrid() "on the fly" when sending data to wrtComp(:)
             ! access the output FieldBundle in the wrtState(i)
             call ESMF_StateGet(wrtState(i), &
-                               itemName="output_"//trim(fcstItemNameList(j)), &
+                               itemName="output_"//trim(fb_name), &
                                fieldbundle=wrtFB(j,i), rc=rc)
-            ! if(mype == 0) print *,'af get wrtfb=',"output_"//trim(fcstItemNameList(j)),' rc=',rc
+            ! if(mype == 0) print *,'af get wrtfb=',"output_"//trim(fb_name),' rc=',rc
             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
             call ESMF_AttributeGet(wrtFB(j,i), convention="NetCDF", purpose="FV3-nooutput", &
@@ -1090,15 +1145,15 @@ module ufsatm_cap_mod
             else
               ! history output forecast bundles
               ! determine regridmethod
-              if (index(fcstItemNameList(j),"_bilinear") >0 )  then
+              if (index(fb_name,"_bilinear") >0 )  then
                 regridmethod = ESMF_REGRIDMETHOD_BILINEAR
-              else if (index(fcstItemNameList(j),"_patch") >0)  then
+              else if (index(fb_name,"_patch") >0)  then
                 regridmethod = ESMF_REGRIDMETHOD_PATCH
-              else if (index(fcstItemNameList(j),"_nearest_stod") >0) then
+              else if (index(fb_name,"_nearest_stod") >0) then
                 regridmethod = ESMF_REGRIDMETHOD_NEAREST_STOD
-              else if (index(fcstItemNameList(j),"_nearest_dtos") >0) then
+              else if (index(fb_name,"_nearest_dtos") >0) then
                 regridmethod = ESMF_REGRIDMETHOD_NEAREST_DTOS
-              else if (index(fcstItemNameList(j),"_conserve") >0) then
+              else if (index(fb_name,"_conserve") >0) then
                 regridmethod = ESMF_REGRIDMETHOD_CONSERVE
               else
                 call ESMF_LogSetError(ESMF_RC_ARG_BAD, &
@@ -1108,7 +1163,7 @@ module ufsatm_cap_mod
               endif
             endif
 
-            write(msgString,"(A,I2.2,',',I2.2,A)") "RH creation for wrtFB(",j,i, ") ...."//trim(fcstItemNameList(j))
+            write(msgString,"(A,I2.2,',',I2.2,A)") "RH creation for wrtFB(",j,i, ") ...."//trim(fb_name)
             call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
 
             if (i==1) then
@@ -1218,6 +1273,106 @@ module ufsatm_cap_mod
 
           if (mype == 0) write(*,'(A,I2,F12.6)') '        done computing routehandle for field bundle: ',j,MPI_Wtime()-time_rh_fb_start
         enddo  ! j=1, FBcount
+
+
+        do j=1, ABcount
+          time_rh_fb_start = MPI_Wtime()
+
+          call ESMF_ArrayBundleGet(fcstAB(j), name=ab_name, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          call ESMF_StateGet(wrtState(i), &
+                             itemName="output_"//trim(ab_name), &
+                             arraybundle=wrtAB(j,i), rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          write(msgString,"(A,I2.2,',',I2.2,A)") "RH creation for wrtAB(",j,i, ") ...."//trim(ab_name)
+          call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+          if (i==1) then
+            write(rh_filename,'(A,I2.2)') 'routehandle_ab', j
+
+            inquire(FILE=trim(rh_filename), EXIST=rh_file_exist)
+
+            if (rh_file_exist .and. use_saved_routehandles) then
+              if(mype==0) print *,'in ufsatm_cap init, routehandle file ',trim(rh_filename), ' exists'
+
+              write(msgString,*) "Calling into ESMF_RouteHandleCreate(from file)...", trim(rh_filename)
+              call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+              call ESMF_TraceRegionEnter("ESMF_RouteHandleCreate(from file)", rc=rc)
+              routehandleAB(j,1) = ESMF_RouteHandleCreate(fileName=trim(rh_filename), rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              call ESMF_TraceRegionExit("ESMF_RouteHandleCreate(from file)", rc=rc)
+
+              write(msgString,*) "... returned from ESMF_RouteHandleCreate(from file)."
+              call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+            else
+              ! this is a Store() for the first wrtComp -> must do the Store()
+
+                write(msgString,*) "Calling into ArrayBundleRedistStore..."
+                call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+                call ESMF_TraceRegionEnter("ESMF_ArrayBundleRedistStore()", rc=rc)
+                call ESMF_ArrayBundleRedistStore(fcstAB(j), wrtAB(j,1), &
+                                                 routehandle=routehandleAB(j,1), &
+                                                 rc=rc)
+                if (rc /= ESMF_SUCCESS) then
+                  call ESMF_LogWrite('ufsatm_cap.F90: InitializeAdvertise error in ESMF_ArrayBundleRedistStore', ESMF_LOGMSG_ERROR, rc=rc)
+                  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                  ! call ESMF_Finalize(endflag=ESMF_END_ABORT)
+                endif
+                call ESMF_TraceRegionExit("ESMF_ArrayBundleRedistStore()", rc=rc)
+
+                write(msgString,*) "... returned from ArrayBundleRedistStore."
+                call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+              if (use_saved_routehandles) then
+
+                write(msgString,*) "Calling into ESMF_RouteHandleWrite...", trim(rh_filename)
+                call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+                call ESMF_TraceRegionEnter("ESMF_RouteHandleWrite()", rc=rc)
+                call ESMF_RouteHandleWrite(routehandleAB(j,1), fileName=trim(rh_filename), rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                call ESMF_TraceRegionExit("ESMF_RouteHandleWrite()", rc=rc)
+                if(mype==0) print *,'in ufsatm_cap init, saved routehandle file ',trim(rh_filename)
+
+                write(msgString,*) "... returned from ESMF_RouteHandleWrite."
+                call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+              endif
+
+            endif
+
+            originPetList(1:num_pes_fcst)  = fcstPetList(:)
+            originPetList(num_pes_fcst+1:) = petList(:)
+
+          else
+            targetPetList(1:num_pes_fcst)  = fcstPetList(:)
+            targetPetList(num_pes_fcst+1:) = petList(:)
+
+            write(msgString,*) "Calling into ESMF_RouteHandleCreate(from RH)..."
+            call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+            call ESMF_TraceRegionEnter("ESMF_RouteHandleCreate(from RH) in lieu of ESMF_ArrayBundleRegridStore()", rc=rc)
+            routehandleAB(j,i) = ESMF_RouteHandleCreate(routehandleAB(j,1), &
+                                                      originPetList=originPetList, &
+                                                      targetPetList=targetPetList, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+            call ESMF_TraceRegionExit("ESMF_RouteHandleCreate(from RH) in lieu of ESMF_ArrayBundleRegridStore()", rc=rc)
+
+            write(msgString,*) "... returned from ESMF_RouteHandleCreate(from RH)."
+            call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+          endif
+          write(msgString,"(A,I2.2,',',I2.2,A)") "... returned from RH creation for wrtAB(",j,i, ")."
+          call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+          if (mype == 0) write(*,'(A,I2,F12.6)') '        done computing routehandle for array bundle: ',j,MPI_Wtime()-time_rh_fb_start
+        enddo  ! j=1, ABcount
+
         if (mype == 0) write(*,'(A,F12.6)') ' done computing all routehandles: ',MPI_Wtime()-time_rh_start
 
         if (allocated(dst_field_mask)) then
@@ -1436,7 +1591,7 @@ module ufsatm_cap_mod
 !-----------------------------------------------------------------------------
 
   subroutine ModelAdvance(gcomp, rc)
-    
+
     use mpi_f08, only : MPI_Wtime
 
     type(ESMF_GridComp)         :: gcomp
@@ -1556,7 +1711,7 @@ module ufsatm_cap_mod
     character(240)              :: msgString
 
     type(ESMF_Clock)            :: clock, clock_out
-    integer                     :: fieldCount
+    integer                     :: fieldCount, arrayCount
 
     real(kind=8)                :: timep2rs
 
@@ -1599,8 +1754,8 @@ module ufsatm_cap_mod
 
       output: if (ANY(nint(output_fh(:)*3600.0) == nfseconds) .or. ANY(frestart(:) == nfseconds)) then
 
-        if (mype == 0 .or. mype == lead_wrttask(1)) print *,' aft fcst run output time=',nfseconds, &
-          'FBcount=',FBcount,'na=',na
+        ! if (mype == 0 .or. mype == lead_wrttask(1)) print *,' aft fcst run output time=',nfseconds, &
+        !   'FBcount=',FBcount,'na=',na
 
         call ESMF_TraceRegionEnter("ESMF_VMEpoch:fcstFB->wrtFB", rc=rc)
 
@@ -1629,6 +1784,21 @@ module ufsatm_cap_mod
 
         enddo
 
+        do j=1, ABCount
+
+          ! execute the routehandle from fcstFB -> wrtFB (either Regrid() or Redist()), only if there are fields in the bundle
+          call ESMF_ArrayBundleGet(fcstAB(j), arrayCount=arrayCount, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          if (arrayCount > 0) then
+            call ESMF_ArrayBundleSMM(fcstAB(j), wrtAB(j,n_group),         &
+                                     routehandle=routehandleAB(j, n_group), &
+                                     zeroregionflag=(/ESMF_REGION_SELECT/), &
+                                     termorderflag=(/ESMF_TERMORDER_SRCSEQ/), rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          end if
+
+        enddo
         call ESMF_VMEpochExit(rc=rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
@@ -1924,5 +2094,4 @@ module ufsatm_cap_mod
   end subroutine ModelFinalize
 !
 !-----------------------------------------------------------------------------
-
 end module ufsatm_cap_mod

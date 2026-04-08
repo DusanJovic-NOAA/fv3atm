@@ -1,3 +1,15 @@
+#define ESMF_ERR(rc) \
+  if (rc /= ESMF_SUCCESS) write(0,'(A,A,I0,A,I0)') __FILE__,':',__LINE__, ' ESMF rc: ', rc; \
+  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+#define ESMF_ERR_RETURN(rc) \
+  if (rc /= ESMF_SUCCESS) write(0,'(A,A,I0,A,I0)') __FILE__,':',__LINE__, ' ESMF rc: ', rc; \
+  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+#define ASSERT(a) \
+  if ((a) .neqv. .true. ) write(0,'(A,A,I0,A)') __FILE__,':',__LINE__, ' assertion failed'; \
+  if ((a) .neqv. .true. ) stop 1
+
 !-----------------------------------------------------------------------
 !
    module module_wrt_grid_comp
@@ -52,6 +64,7 @@
 #ifdef MPASMODEL
      use module_mpas_write_history, only : mpas_write_history
      use module_write_mpas_restart_field_bundle_pio, only : write_mpas_restart_field_bundle_pio
+     use module_write_mpas_restart_array_bundle_pio, only : write_mpas_restart_array_bundle_pio
      use mpas_esmf_mesh,            only : create_mpas_esmf_mesh_from_file
 #endif
 #ifndef MPASMODEL
@@ -99,8 +112,9 @@
 !-----------------------------------------------------------------------
 !
      type(ESMF_FieldBundle)           :: gridFB
-     integer                          :: FBCount
+     integer                          :: FBCount, ABCount, fcstItemCount
      character(len=esmf_maxstr),allocatable    :: fcstItemNameList(:)
+     type(ESMF_StateItem_Flag), allocatable    :: fcstItemTypeList(:)
      character(128)                            :: FBlist_outfilename(100)
      logical                                   :: top_parent_is_global
 !
@@ -197,11 +211,12 @@
      integer                                 :: tl, i, j, n, k
      integer,dimension(2,6)                  :: decomptile
      integer,dimension(2)                    :: regDecomp !define delayout for the nest grid
-     integer                                 :: fieldCount
+     integer                                 :: fieldCount, arrayCount
      type(MPI_Comm)                          :: vm_mpi_comm
      character(40)                           :: fieldName
+     character(40)                           :: arrayName
      type(ESMF_Config)                       :: cf, cf_output_grid
-     type(ESMF_Info)                         :: info, infoFcstMesh, infoWrtGrid
+     type(ESMF_Info)                         :: info, infoFcstMesh, infoWrtGrid, bundle_info
      type(ESMF_DELayout)                     :: delayout
      type(ESMF_GeomType_Flag)                :: fcst_geomtype, wrt_geomtype
      type(ESMF_Grid)                         :: fcstGrid
@@ -211,13 +226,14 @@
      logical                                 :: create_wrtGrid_cubed_sphere = .true.
      type(ESMF_Grid)                         :: actualWrtGrid
      type(ESMF_Mesh)                         :: actualWrtMesh
-     type(ESMF_Array)                        :: array
+     type(ESMF_Array)                        :: array_work, array
      type(ESMF_Field)                        :: field_work, field
      type(ESMF_Decomp_Flag)                  :: decompflagPTile(2,6)
 
-     type(ESMF_StateItem_Flag), allocatable  :: fcstItemTypeList(:)
      type(ESMF_FieldBundle)                  :: fcstFB, fieldbundle, mirrorFB
+     type(ESMF_ArrayBundle)                  :: fcstAB, arraybundle, mirrorAB
      type(ESMF_Field),          allocatable  :: fcstField(:)
+     type(ESMF_Array),          allocatable  :: fcstArray(:)
      type(ESMF_TypeKind_Flag)                :: typekind
      integer                                 :: rank
      character(len=80),         allocatable  :: fieldnamelist(:)
@@ -239,6 +255,35 @@
      logical, allocatable                    :: is_moving(:)
      logical                                 :: isPresent
      integer                                 :: minIndex(2), maxIndex(2)
+
+     integer :: ierr
+     integer :: nprocs, localpet, minIndexPTileCells, maxIndexPTileCells, dimCount, deCount
+     TYPE(mpi_comm) :: comm
+     integer, allocatable :: cell_counts(:), vertex_counts(:), edge_counts(:)
+     integer, allocatable :: deBlockList(:,:,:)
+     integer :: nCells, nVertices, nEdges
+     type (ESMF_DistGrid) :: distgridCells, distgridVertices, distgridEdges
+     real(ESMF_KIND_R4), pointer    :: ptr_r4_d1(:), ptr_r4_d2(:,:), ptr_r4_d3(:,:,:)
+     real(ESMF_KIND_R8), pointer    :: ptr_r8_d1(:), ptr_r8_d2(:,:), ptr_r8_d3(:,:,:)
+     integer(ESMF_KIND_I4), pointer :: ptr_i4_d1(:), ptr_i4_d2(:,:), ptr_i4_d3(:,:,:)
+     character(64), allocatable :: var_dim_names(:)
+     integer :: var_dim_names_count
+    integer :: num_dims_esmf
+
+    character(64), allocatable :: dimension_names(:)
+    integer :: dimSize, dimID, ad(5), itemCount
+
+    type :: dim_info_t
+      character(64) :: dimName
+      integer :: dimSize
+      integer :: dimId
+    end type
+    type (dim_info_t), allocatable :: dim_info_arr(:)
+
+    logical :: isDecomposed
+    integer :: arrayCount_1
+
+    character(len=ESMF_MAXSTR)           :: arrName
 
      integer :: attCount, jidx, idx, noutfile
      character(19)  :: newdate
@@ -1030,27 +1075,27 @@
 !
 !--- Look at the incoming FieldBundles in the imp_state_write, and mirror them as 'output_' bundles
 !
-     call ESMF_StateGet(imp_state_write, itemCount=FBCount, rc=rc)
+     call ESMF_StateGet(imp_state_write, itemCount=fcstItemCount, rc=rc)
      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-     ! if (lprnt) write(0,*)'wrt_initialize_p1: FBCount=',FBCount, ' from imp_state_write'
+     ! if (lprnt) write(0,*)'wrt_initialize_p1: fcstItemCount=',fcstItemCount, ' from imp_state_write'
 
-     allocate(fcstItemNameList(FBCount), fcstItemTypeList(FBCount))
-     allocate(outfilename(2000,FBCount))
+     allocate(fcstItemNameList(fcstItemCount), fcstItemTypeList(fcstItemCount))
+     allocate(outfilename(2000,fcstItemCount))
      outfilename = ''
 
      call ESMF_StateGet(imp_state_write, itemNameList=fcstItemNameList, &
                         itemTypeList=fcstItemTypeList,                  &
-                       !itemorderflag=ESMF_ITEMORDER_ADDORDER,          &
                         rc=rc)
 
      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-!loop over all items in the imp_state_write and collect all FieldBundles
-     do i=1, FBCount
+     ! loop over all items in the imp_state_write and collect all FieldBundles
+     FBCount = 0
+     do i=1, fcstItemCount
 
        if (fcstItemTypeList(i) == ESMF_STATEITEM_FIELDBUNDLE) then
-
+         FBCount = FBCount + 1
          call ESMF_StateGet(imp_state_write, itemName=fcstItemNameList(i), &
                             fieldbundle=fcstFB, rc=rc)
          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
@@ -1273,11 +1318,9 @@
                                     name="output_file", value=outfile_name, rc=rc)
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
-             call ESMF_LogWrite("bf fcstfield, get output_file "//trim(outfile_name)//" "//trim(fieldName),ESMF_LOGMSG_INFO,rc=RC)
              if (trim(outfile_name) /= '') then
                outfilename(j,i) = trim(outfile_name)
              endif
-             call ESMF_LogWrite("af fcstfield, get output_file",ESMF_LOGMSG_INFO,rc=RC)
 
              ! if (lprnt) print *,' i=',i,' j=',j,' outfilename=',trim(outfilename(j,i))
 
@@ -1333,13 +1376,351 @@
 
          endif !if (fieldCount > 0) then
 
+       else if (fcstItemTypeList(i) == ESMF_STATEITEM_ARRAYBUNDLE) then
+         ABCount = ABCount + 1
+         call ESMF_StateGet(imp_state_write, itemName=fcstItemNameList(i), &
+                            arraybundle=fcstAB, rc=rc)
+         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+         call ESMF_InfoGetFromHost(fcstAB, info=info, rc=rc)
+         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+         call ESMF_InfoGetAlloc(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc)
+         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! create a mirrored 'output_' ArrayBundle and add it to importState
+         arraybundle = ESMF_ArrayBundleCreate(name="output_"//trim(fcstItemNameList(i)), rc=rc)
+         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+         call ESMF_StateAdd(imp_state_write, (/arraybundle/), rc=rc)
+         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! copy the fcstAB Attributes to the 'output_' ArrayBundle
+         call ESMF_AttributeCopy(fcstAB, arraybundle, attcopy=ESMF_ATTCOPY_REFERENCE, rc=rc)
+         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! deal with all of the Arrays inside this fcstAB
+         call ESMF_ArrayBundleGet(fcstAB, arrayCount=arrayCount, rc=rc)
+         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+         call ESMF_InfoGetFromHost(fcstAB, info=bundle_info, rc=rc)
+         ! call ESMF_InfoPrint(bundle_info, rc=rc)
+
+         ! Gather information about dimensions
+         call ESMF_InfoGetAlloc(bundle_info, key='/NetCDF/FV3/dimension_names', values=dimension_names, itemCount=itemCount, rc=rc); ESMF_ERR(rc)
+         call ESMF_InfoGet(bundle_info, key='/NetCDF/FV3/dimensions', size=num_dims_esmf, rc=rc); ESMF_ERR(rc)
+
+         allocate(dim_info_arr(num_dims_esmf))
+         do n = 1, num_dims_esmf
+            call ESMF_InfoGet(bundle_info, key='/NetCDF/FV3/dimensions/'//trim(dimension_names(n)), value=dimSize, rc=rc); ESMF_ERR(rc)
+            dim_info_arr(n) % dimName = trim(dimension_names(n))
+            dim_info_arr(n) % dimSize = dimSIze
+         end do
+
+
+         ! Create distgrids for cell, vertex and edge arrays
+         localpet = wrt_int_state%mype
+         nprocs = wrt_int_state%petcount
+         comm = vm_mpi_comm
+
+         call ESMF_InfoGet(bundle_info, key='/NetCDF/FV3/dimensions/nCells', value=nCells, rc=rc); ESMF_ERR(rc)
+         call ESMF_InfoGet(bundle_info, key='/NetCDF/FV3/dimensions/nVertices', value=nVertices, rc=rc); ESMF_ERR(rc)
+         call ESMF_InfoGet(bundle_info, key='/NetCDF/FV3/dimensions/nEdges', value=nEdges,default=1024, rc=rc); ESMF_ERR(rc)
+
+         if (lprnt) then
+           print *,'nCells   =',nCells
+           print *,'nVertices=',nVertices
+           print *,'nEdges   =',nEdges
+         end if
+
+
+         allocate(cell_counts(nprocs))
+         allocate(vertex_counts(nprocs))
+         allocate(edge_counts(nprocs))
+         dimCount = 1
+         deCount = nprocs
+         allocate(deBlockList(dimCount, 2, deCount))
+
+         ! Cells
+         cell_counts(:) = distribute_tasks(nCells, nprocs)
+
+         do j = 1, deCount
+            minIndexPTileCells =0
+            do n=1,j-1
+               minIndexPTileCells = minIndexPTileCells + cell_counts(n)
+            end do
+            minIndexPTileCells = minIndexPTileCells + 1
+            maxIndexPTileCells = minIndexPTileCells + cell_counts(j) - 1
+            deBlockList(1,1,j) = minIndexPTileCells
+            deBlockList(1,2,j) = maxIndexPTileCells
+         end do
+
+         distgridCells = ESMF_DistGridCreate(minIndex=(/1/), maxIndex=(/nCells/), &
+                                             deBlockList=deBlockList, rc=rc); ESMF_ERR(rc)
+
+         ! Vertices
+         vertex_counts(:) = distribute_tasks(nVertices, nprocs)
+
+         do j = 1, deCount
+            minIndexPTileCells =0
+            do n=1,j-1
+               minIndexPTileCells = minIndexPTileCells + vertex_counts(n)
+            end do
+            minIndexPTileCells = minIndexPTileCells + 1
+            maxIndexPTileCells = minIndexPTileCells + vertex_counts(j) - 1
+            deBlockList(1,1,j) = minIndexPTileCells
+            deBlockList(1,2,j) = maxIndexPTileCells
+         end do
+
+         distgridVertices = ESMF_DistGridCreate(minIndex=(/1/), maxIndex=(/nVertices/), &
+                                             deBlockList=deBlockList, rc=rc); ESMF_ERR(rc)
+
+         ! Edges
+         edge_counts(:) = distribute_tasks(nEdges, nprocs)
+
+         do j = 1, deCount
+            minIndexPTileCells =0
+            do n=1,j-1
+               minIndexPTileCells = minIndexPTileCells + edge_counts(n)
+            end do
+            minIndexPTileCells = minIndexPTileCells + 1
+            maxIndexPTileCells = minIndexPTileCells + edge_counts(j) - 1
+            deBlockList(1,1,j) = minIndexPTileCells
+            deBlockList(1,2,j) = maxIndexPTileCells
+         end do
+
+         distgridEdges = ESMF_DistGridCreate(minIndex=(/1/), maxIndex=(/nEdges/), &
+                                             deBlockList=deBlockList, rc=rc); ESMF_ERR(rc)
+
+
+         if (arrayCount > 0) then
+
+           allocate(fcstArray(arrayCount))
+           call ESMF_ArrayBundleGet(fcstAB, arrayList=fcstArray,     &
+                                    itemorderflag=ESMF_ITEMORDER_ADDORDER, rc=rc)
+           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+           do j=1, arrayCount
+             call ESMF_ArrayGet(fcstArray(j), rank=rank, typekind=typekind, dimCount=fieldDimCount, name=arrayName, rc=rc)
+             if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+             call ESMF_InfoGetAlloc(bundle_info, key='/NetCDF/FV3/variables/'//trim(arrayName), values=var_dim_names, itemCount=var_dim_names_count, rc=rc); ESMF_ERR(rc)
+
+             do n=1,rank
+                call get_dimid_for_dimname(var_dim_names(n), dimID, dimSize)
+                ad(n) = dimSize
+             end do
+
+             if (typekind == ESMF_TYPEKIND_R4) then
+               if (rank == 1) then
+                 if (trim(var_dim_names(rank)) == 'nCells') then
+                   array_work = ESMF_ArrayCreate(distgridCells, ESMF_TYPEKIND_R4, name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                 else if (trim(var_dim_names(rank)) == 'nVertices') then
+                   array_work = ESMF_ArrayCreate(distgridVertices, ESMF_TYPEKIND_R4, name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                 else if (trim(var_dim_names(rank)) == 'nEdges') then
+                   array_work = ESMF_ArrayCreate(distgridEdges, ESMF_TYPEKIND_R4, name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                 else
+                   if (mype == 0) write(0,*)'1) R4 rank: 1  Unsupported dimension ', trim(var_dim_names(rank))
+                   call ESMF_Finalize(endflag=ESMF_END_ABORT)
+                 end if
+               else if (rank == 2) then
+                 if (trim(var_dim_names(rank)) == 'nCells') then
+                   allocate(ptr_r4_d2(ad(1),cell_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridCells, farray=ptr_r4_d2, &
+                                                 distgridToArrayMap = (/2/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r4_d2)
+                 else if (trim(var_dim_names(rank)) == 'nVertices') then
+                   allocate(ptr_r4_d2(ad(1),vertex_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridVertices, farray=ptr_r4_d2, &
+                                                 distgridToArrayMap = (/2/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r4_d2)
+                 else if (trim(var_dim_names(rank)) == 'nEdges') then
+                   allocate(ptr_r4_d2(ad(1),edge_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridEdges, farray=ptr_r4_d2, &
+                                                 distgridToArrayMap = (/2/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r4_d2)
+                 else
+                   if (mype == 0) write(0,*)'1) R4 rank: 2  Unsupported dimension ', trim(var_dim_names(rank))
+                   call ESMF_Finalize(endflag=ESMF_END_ABORT)
+                 end if
+               else if (rank == 3) then
+                 if (trim(var_dim_names(rank)) == 'nCells') then
+                   allocate(ptr_r4_d3(ad(1),ad(2),cell_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridCells, farray=ptr_r4_d3, &
+                                                 distgridToArrayMap = (/3/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r4_d3)
+                 else if (trim(var_dim_names(rank)) == 'nVertices') then
+                   allocate(ptr_r4_d3(ad(1),ad(2),vertex_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridVertices, farray=ptr_r4_d3, &
+                                                 distgridToArrayMap = (/3/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r4_d3)
+                 else if (trim(var_dim_names(rank)) == 'nEdges') then
+                   allocate(ptr_r4_d3(ad(1),ad(2),edge_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridEdges, farray=ptr_r4_d3, &
+                                                 distgridToArrayMap = (/3/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r4_d3)
+                 else
+                   if (mype == 0) write(0,*)'1) R4 rank: 3  Unsupported dimension ', trim(var_dim_names(rank))
+                   call ESMF_Finalize(endflag=ESMF_END_ABORT)
+                 end if
+               else
+                 if (mype == 0) write(0,*)'1) R4 Unsupported rank ', rank
+                 call ESMF_Finalize(endflag=ESMF_END_ABORT)
+               endif
+
+             else if (typekind == ESMF_TYPEKIND_R8) then
+               if (rank == 1) then
+                 if (trim(var_dim_names(rank)) == 'nCells') then
+                   array_work = ESMF_ArrayCreate(distgridCells, ESMF_TYPEKIND_R8, name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                 else if (trim(var_dim_names(rank)) == 'nVertices') then
+                   array_work = ESMF_ArrayCreate(distgridVertices, ESMF_TYPEKIND_R8, name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                 else if (trim(var_dim_names(rank)) == 'nEdges') then
+                   array_work = ESMF_ArrayCreate(distgridEdges, ESMF_TYPEKIND_R8, name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                 else
+                   if (mype == 0) write(0,*)'1) R8 rank: 1  Unsupported dimension ', trim(var_dim_names(rank))
+                   call ESMF_Finalize(endflag=ESMF_END_ABORT)
+                 end if
+               else if (rank == 2) then
+                 if (trim(var_dim_names(rank)) == 'nCells') then
+                   allocate(ptr_r8_d2(ad(1),cell_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridCells, farray=ptr_r8_d2, &
+                                                 distgridToArrayMap = (/2/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r8_d2)
+                 else if (trim(var_dim_names(rank)) == 'nVertices') then
+                   allocate(ptr_r8_d2(ad(1),vertex_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridVertices, farray=ptr_r8_d2, &
+                                                 distgridToArrayMap = (/2/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r8_d2)
+                 else if (trim(var_dim_names(rank)) == 'nEdges') then
+                   allocate(ptr_r8_d2(ad(1),edge_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridEdges, farray=ptr_r8_d2, &
+                                                 distgridToArrayMap = (/2/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r8_d2)
+                 else
+                   if (mype == 0) write(0,*)'1) R8 rank: 2  Unsupported dimension ', trim(var_dim_names(rank))
+                   call ESMF_Finalize(endflag=ESMF_END_ABORT)
+                 end if
+               else if (rank == 3) then
+                 if (trim(var_dim_names(rank)) == 'nCells') then
+                   allocate(ptr_r8_d3(ad(1),ad(2),cell_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridCells, farray=ptr_r8_d3, &
+                                                 distgridToArrayMap = (/3/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r8_d3)
+                 else if (trim(var_dim_names(rank)) == 'nVertices') then
+                   allocate(ptr_r8_d3(ad(1),ad(2),vertex_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridVertices, farray=ptr_r8_d3, &
+                                                 distgridToArrayMap = (/3/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r8_d3)
+                 else if (trim(var_dim_names(rank)) == 'nEdges') then
+                   allocate(ptr_r8_d3(ad(1),ad(2),edge_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridEdges, farray=ptr_r8_d3, &
+                                                 distgridToArrayMap = (/3/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_r8_d3)
+                 else
+                   if (mype == 0) write(0,*)'1) R8 rank: 3  Unsupported dimension ', trim(var_dim_names(rank))
+                   call ESMF_Finalize(endflag=ESMF_END_ABORT)
+                 end if
+               else
+                 if (mype == 0) write(0,*)'1) R8 Unsupported rank ', rank
+                 call ESMF_Finalize(endflag=ESMF_END_ABORT)
+               endif
+
+             else if (typekind == ESMF_TYPEKIND_I4) then
+               if (rank == 1) then
+                 if (trim(var_dim_names(rank)) == 'nCells') then
+                   array_work = ESMF_ArrayCreate(distgridCells, ESMF_TYPEKIND_I4, name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                 else if (trim(var_dim_names(rank)) == 'nVertices') then
+                   array_work = ESMF_ArrayCreate(distgridVertices, ESMF_TYPEKIND_I4, name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                 else if (trim(var_dim_names(rank)) == 'nEdges') then
+                   array_work = ESMF_ArrayCreate(distgridEdges, ESMF_TYPEKIND_I4, name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                 else
+                   if (mype == 0) write(0,*)'1) I4 rank: 1  Unsupported dimension ', trim(var_dim_names(rank))
+                   call ESMF_Finalize(endflag=ESMF_END_ABORT)
+                 end if
+               else if (rank == 2) then
+                 if (trim(var_dim_names(rank)) == 'nCells') then
+                   allocate(ptr_i4_d2(ad(1),cell_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridCells, farray=ptr_i4_d2, &
+                                                 distgridToArrayMap = (/2/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_i4_d2)
+                 else if (trim(var_dim_names(rank)) == 'nVertices') then
+                   allocate(ptr_i4_d2(ad(1),vertex_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridVertices, farray=ptr_i4_d2, &
+                                                 distgridToArrayMap = (/2/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_i4_d2)
+                 else if (trim(var_dim_names(rank)) == 'nEdges') then
+                   allocate(ptr_i4_d2(ad(1),edge_counts(mype+1)))
+                   array_work = ESMF_ArrayCreate(distgridEdges, farray=ptr_i4_d2, &
+                                                 distgridToArrayMap = (/2/), &
+                                                 indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                 name=trim(arrayName), rc=rc); ESMF_ERR(rc)
+                   deallocate(ptr_i4_d2)
+                 else
+                   if (mype == 0) write(0,*)'1) i4 rank: 2  Unsupported dimension ', trim(var_dim_names(rank))
+                   call ESMF_Finalize(endflag=ESMF_END_ABORT)
+                 end if
+               else
+                 if (mype == 0) write(0,*)'1) I4 Unsupported rank ', rank
+                 call ESMF_Finalize(endflag=ESMF_END_ABORT)
+               endif
+             else
+               if (mype == 0) write(0,*)'1) Unsupported typekind ', typekind
+               call ESMF_Finalize(endflag=ESMF_END_ABORT)
+             end if
+
+             ! call init_field_to_missing_value(field_work, rc=rc)
+             ! if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+             call ESMF_AttributeCopy(fcstArray(j), array_work, attcopy=ESMF_ATTCOPY_REFERENCE, rc=rc); ESMF_ERR(rc)
+
+             ! add the output array to the 'output_' ArrayBundle
+             call ESMF_ArrayBundleAdd(arraybundle, (/array_work/), rc=rc); ESMF_ERR(rc)
+
+           end do ! j=1, arrayCount
+
+           deallocate(fcstArray)
+         end if ! if (arrayCount > 0) then
+
+         deallocate(cell_counts)
+         deallocate(vertex_counts)
+         deallocate(edge_counts)
+         deallocate(deBlockList)
+         deallocate(dim_info_arr)
+
        else  ! anything but a FieldBundle in the state is unexpected here
          call ESMF_LogSetError(ESMF_RC_ARG_BAD, &
                                msg="Only FieldBundles supported in fcstState.", line=__LINE__, file=__FILE__)
          return
        endif
 
-     enddo !FBCount
+     enddo !fcstItemCount
 
      !loop over all items in the imp_state_write and count output FieldBundles
      call get_outfile(FBCount, outfilename, FBlist_outfilename, noutfile)
@@ -1356,7 +1737,10 @@
        ! if (lprnt) write(0,*)'wrt_initialize_p1: created wrtFB ',i, ' with name ', trim(FBlist_outfilename(i))
 
        ! if (lprnt) write(0,*)'wrt_initialize_p1: loop over ', FBCount, ' forecast bundles'
-       do n=1, FBCount
+
+       do n=1, fcstItemCount
+
+        if (fcstItemTypeList(n) == ESMF_STATEITEM_FIELDBUNDLE) then
 
          call ESMF_StateGet(imp_state_write, itemName="output_"//trim(fcstItemNameList(n)), &
                             fieldbundle=fcstFB, rc=rc)
@@ -1407,7 +1791,8 @@
 
          endif ! index(trim(fcstItemNameList(n)),trim(FBlist_outfilename(i)))
 
-       enddo ! FBCount
+        end if ! fcstItemTypeList(n) == ESMF_STATEITEM_FIELDBUNDLE
+       enddo ! fcstItemCount
 
      enddo ! end wrt_int_state%FBCount
 !
@@ -1679,6 +2064,58 @@
 #ifdef UFS_TRACING
      if (mype == 0) call ufs_trace(comp_name, "wrt_initialize_p1", "E")
 #endif
+
+  contains
+
+       function distribute_tasks(nproc, m) result(counts)
+         implicit none
+         integer, intent(in) :: nproc
+         integer, intent(in) :: m
+         integer, allocatable :: counts(:)
+         integer :: base, rem, i
+
+         if (m <= 0) then
+           stop 'distribute_tasks: m must be >= 1'
+         end if
+         if (nproc < 0) then
+           stop 'distribute_tasks: nproc must be >= 0'
+         end if
+
+         allocate(counts(m))
+
+         base = nproc / m
+         rem  = mod(nproc, m)
+
+         do i = 1, m
+           if (i <= rem) then
+             counts(i) = base + 1
+           else
+             counts(i) = base
+           end if
+         end do
+       end function distribute_tasks
+
+       subroutine get_dimid_for_dimname(dimName, dimID, dimSize)
+
+          character(len=*), intent(in) :: dimName
+          integer, intent(out) :: dimID
+          integer, intent(out) :: dimSize
+
+          integer :: n
+
+          do n = 1, size(dim_info_arr)
+              if (trim(dim_info_arr(n) % dimName) == trim(dimName)) then
+                  dimID = dim_info_arr(n) % dimID
+                  dimSize = dim_info_arr(n) % dimSize
+                  return
+              end if
+          end do
+
+          dimID = -1
+          write(0,*)'unknown dim ', trim(dimName)
+          stop 1
+
+       end subroutine get_dimid_for_dimname
      end subroutine wrt_initialize_p1
 !
 !-----------------------------------------------------------------------
@@ -1943,6 +2380,7 @@
      character(20)                         :: time_iso     ! "YYYY-MM-DDThh:mm:ssZ"
      character(19)                         :: xtime        ! "YYYY-MM-DD_hh:mm:ss"
      character(15)                         :: time_restart ! "YYYYMMDD.hhmmss"
+     character(19)                         :: time_restart_mpas ! "YYYY-MM-DD_hh:mm:ss"
      character(15)                         :: tile_id
 
      real                                  :: seconds_since_start
@@ -1981,6 +2419,12 @@
      type(ESMF_Grid)                       :: src_grid, dst_grid
      type(ESMF_Field)                      :: dst_field_mask
      type(ESMF_GeomType_Flag)              :: geomtype
+
+     integer :: itemCount
+     character(len=ESMF_MAXSTR),allocatable    :: itemNameList(:)
+     type(ESMF_StateItem_Flag), allocatable    :: itemTypeList(:)
+     type(ESMF_ArrayBundle)                    :: arrayBundle
+     character(len=ESMF_MAXSTR)                :: nameAB
 !
 !-----------------------------------------------------------------------
 !***********************************************************************
@@ -2074,15 +2518,17 @@
        write(cfhour, cform) nf_hours
      endif
 !
-     if(lprnt) print *,'in wrt run, cdate=',cdate(1:4),'fcst_seconds=',fcst_seconds/3600.,'nfhour=',nfhour,&
-     'lupp_history=', lupp_history, 'lrestart=',lrestart,'write grid comp not return,cfhour=',trim(cfhour)
+     ! if(lprnt) print *,'in wrt run, cdate=',cdate(1:4),'fcst_seconds=',fcst_seconds/3600.,'nfhour=',nfhour,&
+     ! 'lupp_history=', lupp_history, 'lrestart=',lrestart,'write grid comp not return,cfhour=',trim(cfhour)
 !
 !
 !-----------------------------------------------------------------------
 !*** loop on the "output_" FieldBundles, i.e. files that need to write out
 !-----------------------------------------------------------------------
 
-     do i=1, FBCount
+     do i=1, fcstItemCount
+
+      if (fcstItemTypeList(i) == ESMF_STATEITEM_FIELDBUNDLE) then
        call ESMF_StateGet(imp_state_write, itemName="output_"//trim(fcstItemNameList(i)), &
                           fieldbundle=file_bundle, rc=rc)
        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
@@ -2316,6 +2762,7 @@
          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
        end if
 #endif
+      end if ! (fcstItemTypeList(i) == ESMF_STATEITEM_FIELDBUNDLE) then
      enddo
 !
 !-----------------------------------------------------------------------
@@ -2677,8 +3124,8 @@
                 !         Time:standard_name = "time" ;
 
                 write(xtime,'(I4,"-",I2.2,"-",I2.2,"_",I2.2,":",I2.2,":",I2.2)') cdate(1:6)
-
                 seconds_since_start = nfhour * 3600.0
+
                 call write_mpas_restart_field_bundle_pio(wrt_int_state%wrtFB(nbdl), &
                                                          trim(filename),            &
                                                          wrt_mpi_comm,              &
@@ -2790,6 +3237,105 @@
           endif
 
         enddo two_phase_loop
+
+        ! Look for ArrayBundles (at present only MPAS is using ArrayBundle)
+#ifdef MPASMODEL
+        call ESMF_StateGet(imp_state_write, itemCount=itemCount, rc=rc); ESMF_ERR(rc)
+
+        allocate(itemNameList(itemCount), itemTypeList(itemCount))
+        call ESMF_StateGet(imp_state_write, itemNameList=itemNameList, &
+                           itemTypeList=itemTypeList,                  &
+                           itemorderflag=ESMF_ITEMORDER_ADDORDER, rc=rc); ESMF_ERR(rc)
+
+        do i=1, itemCount
+           if (itemTypeList(i) == ESMF_STATEITEM_ARRAYBUNDLE) then
+
+            call ESMF_StateGet(imp_state_write, itemName=itemNameList(i), &
+                               arraybundle=arrayBundle, rc=rc); ESMF_ERR(rc)
+
+            call ESMF_ArrayBundleGet(arrayBundle, name=nameAB, rc=rc); ESMF_ERR(rc)
+
+            if (nameAB(1:7) == 'output_') then
+                nameAB = nameAB(8:) ! strip first 7 characters 'output_'
+            end if
+
+            if (nameAB(1:8) == 'restart_') then
+               if (lrestart) then
+                   write(time_restart_mpas,'(I4,"-",I2.2,"-",I2.2,"_",I2.2,".",I2.2,".",I2.2)') cdate(1:6)
+
+                   filename = 'restart_wgc.'//trim(time_restart_mpas)//'.nc'
+
+                   ! We need to pass two time related variables, since they are passed to
+                   ! the WGC via Info, they are not updated during model execution
+                   !
+                   !     char xtime(Time, StrLen) ;
+                   !         xtime:units = "YYYY-MM-DD_hh:mm:ss" ;
+                   !         xtime:long_name = "Model valid time" ;
+                   !     float Time(Time) ;
+                   !         Time:units = "seconds since 2025-11-20 00:00:00" ;
+                   !         Time:long_name = "CF-compliant valid time" ;
+                   !         Time:standard_name = "time" ;
+
+                   write(xtime,'(I4,"-",I2.2,"-",I2.2,"_",I2.2,":",I2.2,":",I2.2)') cdate(1:6)
+                   seconds_since_start = nfhour * 3600.0
+
+                   wbeg = MPI_Wtime()
+
+                   call write_mpas_restart_array_bundle_pio(arrayBundle,               &
+                                                            trim(filename),            &
+                                                            wrt_mpi_comm,              &
+                                                            wrt_int_state%mype,        &
+                                                            xtime,                     &
+                                                            seconds_since_start,       &
+                                                            rc); ESMF_ERR(rc)
+                   wend = MPI_Wtime()
+                   if (lprnt) then
+                     write(*,'(A56,A,F10.5,A,I5.2,A,I2.2,1X,A)') trim(filename),' write time is ',wend-wbeg  &
+                            ,' at fcst ',NF_HOURS,':',NF_MINUTES
+                   endif
+                end if ! lrestart
+
+             else if (wrt_int_state%output_history .and. lupp_history) then  ! nameAB(1:8) /= 'restart_'
+                ! write(time_restart,'(I4,I2.2,I2.2,".",I2.2,I2.2,I2.2)') cdate(1:6)
+                write(xtime,'(I4,"-",I2.2,"-",I2.2,"_",I2.2,".",I2.2,".",I2.2)') cdate(1:6)
+
+                filename = trim(nameAB)//'.'//trim(xtime)//'.nc'
+
+                ! We need to pass two time related variables, since they are passed to
+                ! the WGC via Info, they are not updated during model execution
+                !
+                !     char xtime(Time, StrLen) ;
+                !         xtime:units = "YYYY-MM-DD_hh:mm:ss" ;
+                !         xtime:long_name = "Model valid time" ;
+                !     float Time(Time) ;
+                !         Time:units = "seconds since 2025-11-20 00:00:00" ;
+                !         Time:long_name = "CF-compliant valid time" ;
+                !         Time:standard_name = "time" ;
+
+                write(xtime,'(I4,"-",I2.2,"-",I2.2,"_",I2.2,":",I2.2,":",I2.2)') cdate(1:6)
+                seconds_since_start = nfhour * 3600.0
+
+                wbeg = MPI_Wtime()
+
+                call write_mpas_restart_array_bundle_pio(arrayBundle,               &
+                                                         trim(filename),            &
+                                                         wrt_mpi_comm,              &
+                                                         wrt_int_state%mype,        &
+                                                         xtime,                     &
+                                                         seconds_since_start,       &
+                                                         rc); ESMF_ERR(rc)
+                wend = MPI_Wtime()
+                if (lprnt) then
+                  write(*,'(A56,A,F10.5,A,I5.2,A,I2.2,1X,A)') trim(filename),' write time is ',wend-wbeg  &
+                         ,' at fcst ',NF_HOURS,':',NF_MINUTES
+                endif
+
+             end if ! nameAB(1:8) == 'restart_'
+
+           end if ! ESMF_STATEITEM_ARRAYBUNDLE
+
+        end do ! i=1, itemCount
+#endif
       endif ! if ( wrt_int_state%output_history )
 
       call ESMF_VMBarrier(VM, rc=rc)
@@ -3434,7 +3980,7 @@
   !> @param[in] comp ESMF grid component
   !> @param[out] rc Return code.
   !>
-  !> @author J. Wang/G. Theurich @date Jul, 2017  
+  !> @author J. Wang/G. Theurich @date Jul, 2017
   subroutine ioCompSS(comp, rc)
     type(ESMF_GridComp)   :: comp
     integer, intent(out)  :: rc
@@ -3456,7 +4002,7 @@
   !> @param clock ESMF clock
   !> @param[out] rc Return code.
   !>
-  !> @author G. Theurich @date Jul, 2017  
+  !> @author G. Theurich @date Jul, 2017
   subroutine ioCompRun(comp, importState, exportState, clock, rc)
     use netcdf
 
@@ -3840,7 +4386,7 @@
     !> @param[in] dimLablel Dimension label
     !> @param[out] rc Return code.
     !>
-    !> @author G. Theurich @date Jul, 2017 
+    !> @author G. Theurich @date Jul, 2017
     subroutine write_out_ungridded_dim_atts(dimLabel, rc)
       character(len=*)      :: dimLabel
       integer, intent(out)  :: rc
@@ -4372,7 +4918,7 @@
   !> @param[in] jmax Maximum on j-direction
   !> @param[out] aslat SINE of latitude in real(4)
   !>
-  !> @author J. Wang @date Jul, 2017  
+  !> @author J. Wang @date Jul, 2017
   subroutine splat4(idrt,jmax,aslat)
 
       implicit none
@@ -4489,7 +5035,7 @@
      !> @param[in] jmax Maximum on j-direction
      !> @param[out] aslat SINE of latitude in real(8)
      !>
-     !> @author J. Wang @date Jul, 2017 
+     !> @author J. Wang @date Jul, 2017
      subroutine splat8(idrt,jmax,aslat)
 !$$$
       implicit none
@@ -4598,7 +5144,7 @@
       ENDIF
 ! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
      end subroutine splat8
-   
+
    !> @brief Compute geographical lat/lon from rotated lat/lon grid
    !>
    !> @param[in] tlmd Rotated Longitude
@@ -4672,7 +5218,7 @@
      !> @param[inout] y Lambert Y coordinate
      !> @param[in] inv Transformation indicator
      !>
-     !> @author D. Jovic @date Jul, 2017 
+     !> @author D. Jovic @date Jul, 2017
      subroutine lambert(stlat1,stlat2,c_lat,c_lon,glon,glat,x,y,inv)
 
 !-------------------------------------------------------------------------------
@@ -4740,7 +5286,7 @@
      !> @param[inout] outfile_name Output file names
      !> @param[inout] noutfile Number of output files
      !>
-     !> @author J. Wang @date Jul, 2017 
+     !> @author J. Wang @date Jul, 2017
      subroutine get_outfile(nfl, filename, outfile_name, noutfile)
        integer, intent(in)          :: nfl
        character(*), intent(in)     :: filename(:,:)
@@ -4781,7 +5327,7 @@
      !>
      !> @param[in] string String with suffix
      !>
-     !> @author J. Wang @date Jul, 2017 
+     !> @author J. Wang @date Jul, 2017
      pure function trim_regridmethod_suffix(string) result(trimmed_string)
        character(len=*), intent(in) :: string
        character(len=:), allocatable :: trimmed_string
@@ -4799,7 +5345,7 @@
      !> @param[in] string String with suffix
      !> @param[in] suffix Suffix string
      !>
-     !> @author J. Wang @date Jul, 2017 
+     !> @author J. Wang @date Jul, 2017
      pure function trim_suffix(string, suffix) result(trimmed_string)
        character(len=*), intent(in) :: string, suffix
        character(len=:), allocatable :: trimmed_string
@@ -4857,8 +5403,8 @@
 
       end subroutine print_att_list
 !
-#define ESMF_ERR_RETURN(rc) \
-    if (ESMF_LogFoundError(rc, msg="Breaking out of subroutine", line=__LINE__, file=__FILE__)) call ESMF_Finalize(endflag=ESMF_END_ABORT)
+! #define ESMF_ERR_RETURN(rc) \
+    ! if (ESMF_LogFoundError(rc, msg="Breaking out of subroutine", line=__LINE__, file=__FILE__)) call ESMF_Finalize(endflag=ESMF_END_ABORT)
 
 #ifdef FV3
       subroutine compute_fields_checksum(bundle, rc)
@@ -5237,6 +5783,22 @@
         rc = 0
 
       end subroutine add_dst_mask
+
+      logical function is_decomposed_dim(dimName)
+
+          implicit none
+
+          character(len=*), intent(in) :: dimName
+
+          if (trim(dimName) == 'nCells' .or. &
+              trim(dimName) == 'nEdges' .or. &
+              trim(dimName) == 'nVertices') then
+              is_decomposed_dim = .true.
+          else
+              is_decomposed_dim = .false.
+          end if
+
+      end function is_decomposed_dim
 
     end module  module_wrt_grid_comp
 !

@@ -27,21 +27,21 @@ module module_fcst_grid_comp
 
   use ufs_mpas_wgc_output,     only : ufs_mpas_create_history_bundle, ufs_mpas_update_history_bundle
   use ufs_mpas_wgc_output,     only : ufs_mpas_create_restart_bundle, ufs_mpas_update_restart_bundle
+  use ufs_mpas_wgc_output,     only : ufs_mpas_create_restart_array_bundle, ufs_mpas_update_restart_array_bundle
 
   use module_cplfields,        only: nExportFields, exportFields, exportFieldsInfo, &
                                      nImportFields, importFields, importFieldsInfo
 
+  use module_write_mpas_restart_array_bundle_pio, only : write_mpas_restart_array_bundle_pio
+
   implicit none
   private
 
-  !---- model defined-types ----
+  ! module variables
   integer                        :: n_atmsteps
-
+  integer                        :: seconds
   integer, allocatable           :: frestart(:)
-
-  !----- coupled model data -----
-  ! integer :: calendar_type = -99
-  integer :: date_init(6)
+  type(ESMF_Time)                :: StartTime
 
   integer :: mype = 0
 
@@ -63,6 +63,9 @@ module module_fcst_grid_comp
   integer :: num_history_conserve_vars = 0
 
   type(ESMF_FieldBundle) :: restart_field_bundle
+  type(ESMF_ArrayBundle) :: restart_array_bundle
+  type(ESMF_ArrayBundle) :: history_array_bundle
+  type(ESMF_ArrayBundle) :: diag_bundle
 
   public SetServices
 
@@ -119,11 +122,10 @@ contains
     ! Locals
     integer :: i, j, k, n
     type(ESMF_VM) :: VM
-    type(ESMF_Time) :: CurrTime, StartTime, StopTime
+    type(ESMF_Time) :: CurrTime, StopTime
     type(ESMF_Config) :: CF
     real(kind=8) :: tbeg1
-    ! integer :: initClock, io_unit, calendar_type_res, date_res(6), date_init_res(6)
-    integer,dimension(6) :: date, date_end, days
+    integer,dimension(6) :: date_init, date, date_end
     character(4) dateSY
     character(2) dateSM,dateSD,dateSH,dateSN,dateSS
     character(len=80) :: dateS
@@ -171,12 +173,12 @@ contains
                        YY=date_init(1), MM=date_init(2), DD=date_init(3), &
                        H=date_init(4),  M =date_init(5), S =date_init(6), rc=rc); ESMF_ERR(rc)
 
-    date=0
+    date = 0
     call ESMF_TimeGet (CurrTime,                           &
                        YY=date(1), MM=date(2), DD=date(3), &
                        H=date(4),  M =date(5), S =date(6), rc=rc); ESMF_ERR(rc)
 
-    date_end=0
+    date_end = 0
     call ESMF_TimeGet (StopTime,                                       &
                        YY=date_end(1), MM=date_end(2), DD=date_end(3), &
                        H=date_end(4),  M =date_end(5), S =date_end(6), rc=rc); ESMF_ERR(rc)
@@ -205,16 +207,8 @@ contains
     call mpas_dmpar_sum_int(domain % dminfo, nCellsSolve, nCellsGlobal)
     call mpas_dmpar_sum_int(domain % dminfo, nEdgesSolve, nEdgesGlobal)
 
-    ! if (mype == 0) then
-    !    write(0,*)'nCellsSolve     = ', nCellsSolve
-    !    write(0,*)'nVerticesSolve  = ', nVerticesSolve
-    !    write(0,*)'nVertLevels     = ', nVertLevels
-    !    write(0,*)'nVerticesGlobal = ', nVerticesGlobal
-    !    write(0,*)'nCellsGlobal    = ', nCellsGlobal
-    !    write(0,*)'nEdgesGlobal    = ', nEdgesGlobal
-    ! end if
-
     ! History bundles
+
     call parse_history_list_vars(rc=rc); ESMF_ERR(rc)
 
     if (num_history_bilinear_vars > 0) then
@@ -242,14 +236,30 @@ contains
       call ESMF_StateAdd(exportState, (/ history_conserve_field_bundle /), rc=rc); ESMF_ERR(rc)
     end if
 
+    ! Test history type bundle on mesh, using restart array bundle
+    call ufs_mpas_create_restart_array_bundle(history_array_bundle, bundle_name='history_native', stream_name='output', rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoGetFromHost(history_array_bundle, info=info, rc=rc); ESMF_ERR(rc)
+    call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
+    call ESMF_StateAdd(exportState, (/ history_array_bundle /), rc=rc); ESMF_ERR(rc)
+
+    ! call ufs_mpas_create_restart_array_bundle(diag_bundle, bundle_name='diag_native', stream_name='diagnostics', rc=rc); ESMF_ERR(rc)
+    ! call ESMF_InfoGetFromHost(diag_bundle, info=info, rc=rc); ESMF_ERR(rc)
+    ! call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
+    ! call ESMF_StateAdd(exportState, (/ diag_bundle /), rc=rc); ESMF_ERR(rc)
+
     ! Restart bundle
     if (quilting_restart) then
-      call ufs_mpas_create_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
+      ! use FieldBundle
+      ! call ufs_mpas_create_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
+      ! call ESMF_InfoGetFromHost(restart_field_bundle, info=info, rc=rc); ESMF_ERR(rc)
+      ! call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
+      ! call ESMF_StateAdd(exportState, (/ restart_field_bundle /), rc=rc); ESMF_ERR(rc)
 
-      call ESMF_InfoGetFromHost(restart_field_bundle, info=info, rc=rc); ESMF_ERR(rc)
+      ! use ArrayBundle
+      call ufs_mpas_create_restart_array_bundle(restart_array_bundle, bundle_name='restart_mpas_array', stream_name='restart', rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoGetFromHost(restart_array_bundle, info=info, rc=rc); ESMF_ERR(rc)
       call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
-
-      call ESMF_StateAdd(exportState, (/ restart_field_bundle /), rc=rc); ESMF_ERR(rc)
+      call ESMF_StateAdd(exportState, (/ restart_array_bundle /), rc=rc); ESMF_ERR(rc)
     end if
 
     ngrids = 1
@@ -427,16 +437,14 @@ contains
 
     ! Locals
     integer             :: ierr
-    integer             :: seconds
     integer             :: fcst_seconds, fcst_days
     real(kind=8)        :: mpi_wtime, tbeg1
+    character(19)       :: xtime        ! "YYYY-MM-DD_hh:mm:ss"
 
     type (ESMF_Time) :: ufsCurrTime
-    type (MPAS_Time_Type) :: startTime, currTime, stepStopTime
+    type (MPAS_Time_Type) :: mpasStartTime, mpasCurrTime, stepStopTime
     type (MPAS_Clock_type), pointer :: mpas_clock
     type (MPAS_TimeInterval_type) :: atmTimeStep
-    character(len=StrKIND) :: timeStamp
-    character(len=64) :: fname
 
     ! Initialize ESMF error message.
     rc = ESMF_SUCCESS
@@ -448,29 +456,28 @@ contains
 
     mpas_clock => domain % clock
 
-    currTime = mpas_get_clock_time(mpas_clock, MPAS_NOW, ierr=ierr)
-    call mpas_get_time(curr_time=currTime, dateTimeString=timeStamp, ierr=ierr)
+    mpasStartTime = mpas_get_clock_time(mpas_clock, MPAS_START_TIME, ierr)
+    mpasCurrTime = mpas_get_clock_time(mpas_clock, MPAS_NOW, ierr=ierr)
 
     ! Assert that the UFS and MPAS clocks are in sync
-    ASSERT (ufsCurrTime == currTime % t)
+    ASSERT (ufsCurrTime == mpasCurrTime % t)
 
     ! Set MPAS's clock stop dt_atmos seconds from current time
     ! This will make MPAS run dt_atmos/config_dt steps, then return
     call mpas_set_timeInterval(atmTimeStep, S=dt_atmos, ierr=ierr)
-    stepStopTime = currTime + atmTimeStep
+    stepStopTime = mpasCurrTime + atmTimeStep
     call mpas_set_clock_time(mpas_clock, stepStopTime, MPAS_STOP_TIME, ierr=ierr)
 
     call mpas_run(domain)
 
     ! The MPAS's clock has advanced in mpas_run, look at the MPAS's current time,
-    ! and compute number of seconds since the start time, to determine if
-    ! it's time for output
-    currTime = mpas_get_clock_time(mpas_clock, MPAS_NOW, ierr=ierr)
-    startTime = mpas_get_clock_time(mpas_clock, MPAS_START_TIME, ierr)
-    call mpas_get_timeInterval(currTime-startTime, DD=fcst_days, S=fcst_seconds, ierr=ierr)
-    call mpas_get_time(curr_time=currTime, dateTimeString=timeStamp, ierr=ierr)
+    ! and compute number of seconds since the start time (original non-restarted run)
+    ! saved in StartTime module variable, to determine if it's time for output
+    mpasCurrTime = mpas_get_clock_time(mpas_clock, MPAS_NOW, ierr=ierr)
 
-    seconds = (fcst_days*86400 + fcst_seconds)
+    n_atmsteps = (mpasCurrTime % t - StartTime) / atmTimeStep % ti
+
+    call ESMF_TimeIntervalGet(mpasCurrTime % t - StartTime, s=seconds, rc=rc)
 
     if (ANY(nint(output_fh(:)*3600.0) == seconds)) then
        if (num_history_bilinear_vars > 0) then
@@ -488,18 +495,27 @@ contains
        if (num_history_conserve_vars > 0) then
           call ufs_mpas_update_history_bundle(history_conserve_field_bundle, history_conserve_vars(1:num_history_conserve_vars), rc=rc); ESMF_ERR(rc)
        end if
+
+       ! Test history type bundle on mesh, using restart array bundle
+       call ufs_mpas_update_restart_array_bundle(history_array_bundle, stream_name='output', rc=rc); ESMF_ERR(rc)
+       ! call ufs_mpas_update_restart_array_bundle(diag_bundle, stream_name='diagnostics', rc=rc); ESMF_ERR(rc)
     end if
 
     ! Update restart bundle
     if (quilting_restart) then
         if (ANY(frestart(:) == seconds)) then
-            call ufs_mpas_update_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
+            ! call ufs_mpas_update_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
+
+            call ufs_mpas_update_restart_array_bundle(restart_array_bundle, stream_name='restart', rc=rc); ESMF_ERR(rc)
+
         end if
     end if
 
     ! Timing info (debug mode)
-    if (mype == 0) write(*,'(A,I16,A,F16.6)')'PASS(fcstRUN phase 1), n_atmsteps = ', &
-                                               n_atmsteps,' time is ',mpi_wtime()-tbeg1
+    if (mype == 0) write(*,'(A,I8,A,F8.3,A,F8.4)') &
+                                       'atm phase1: atmsteps: ',  n_atmsteps, &
+                                       ' fcst time: ',(seconds/3600.), &
+                                       ' elapsed time per step: ',  mpi_wtime()-tbeg1
   end subroutine fcst_run_phase_1
 
   ! ###########################################################################################
@@ -512,7 +528,6 @@ contains
     integer,intent(out) :: rc
 
     ! Locals
-    integer             :: seconds
     real(kind=8)        :: mpi_wtime, tbeg1
 
     ! Initialize ESMF error message.
@@ -524,8 +539,10 @@ contains
     call setup_exportdata(rc=rc); ESMF_ERR(rc)
 
     ! Timing info (debug mode)
-    if (mype == 0) write(*,'(A,I16,A,F16.6)')'PASS(fcstRUN phase 2), n_atmsteps = ', &
-                                               n_atmsteps,' time is ',mpi_wtime()-tbeg1
+    if (mype == 0) write(*,'(A,I8,A,F8.3,A,F8.4)') &
+                                       'atm phase2: atmsteps: ',  n_atmsteps, &
+                                       ' fcst time: ',(seconds/3600.), &
+                                       ' elapsed time per step: ',  mpi_wtime()-tbeg1
   end subroutine fcst_run_phase_2
 
   ! ###########################################################################################
