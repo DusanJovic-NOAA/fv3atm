@@ -1898,9 +1898,22 @@ contains
 
    type (mpas_pool_type), pointer :: statePool
 
+   integer, parameter :: max_fields_to_write = 1000
+   character(len=64), dimension(max_fields_to_write) :: fields_to_write
+   character(len=64) :: var_name
+   integer :: n, nfields
+   logical :: skip_invariant
+
    rc = 0
 
-   ! Look at 'restart' stream
+   skip_invariant = .false.
+
+   ! Check if 'invariant' stream is valid (active)
+   nullify(stream)
+   if (MPAS_stream_list_query(domain_ptr % streamManager % streams, 'invariant', stream, ierr=ierr)) then
+      skip_invariant =  stream % valid
+   endif
+
    nullify(stream)
    if (.not. MPAS_stream_list_query(domain_ptr % streamManager % streams, trim(stream_name), stream, ierr=ierr)) then
       write(0,*)'ERROR, Unknown stream name: ', trim(stream_name)
@@ -2001,8 +2014,9 @@ contains
    variable_names = ''
    numVars = 0
 
+   nfields = 0
    call mpas_pool_begin_iteration(stream % field_pool)
-   FIELD_LOOP: do while ( mpas_pool_get_next_member(stream % field_pool, itr) )
+   SEARCH_LOOP: do while ( mpas_pool_get_next_member(stream % field_pool, itr) )
 
        if (itr % memberType == MPAS_POOL_CONFIG) then
 
@@ -2018,425 +2032,441 @@ contains
            end if
            call mpas_pool_set_error_level(err_level)
 
-           if (.not. active_field) cycle FIELD_LOOP
+           if (.not. active_field) cycle SEARCH_LOOP
 
-           ! To avoid accidentally matching in case statements below...
-           info % fieldType = -1
+           nfields = nfields + 1
 
-           call mpas_pool_get_field_info(allFields, itr % memberName, info)
-
-           ! if (trim(itr % memberName) == 'scalars') cycle FIELD_LOOP
-
-           ! Set time level to read
-           if (info % nTimeLevels >= timeLevelIn) then
-               timeLevel = timeLevelIn
-           else
-               timeLevel = 1
-           end if
-
-           hasTimeDimension = .false.
-           attLists => null()
-           dimNames = ''
-           nDims = info % nDims
-           isVarArray = .false.
-
-           select case (info % fieldType)
-           case (MPAS_POOL_REAL)
-               typeName = 'float'
-               select case (info % nDims)
-                   case (0)
-                       call mpas_pool_get_field(allFields, itr % memberName, real0d, timeLevel)
-                       hasTimeDimension = real0d % hasTimeDimension
-                       attLists => real0d % attLists
-                       ! no dimNames in 0d
-                       block => real0d % block
-
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), value=real0d % scalar, rc=rc); ESMF_ERR(rc)
-                       if (RKIND == R4KIND) then
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_real, rc=rc); ESMF_ERR(rc)
-                       else if (RKIND == R8KIND) then
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_double, rc=rc); ESMF_ERR(rc)
-                       end if
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
-
-                   case (1)
-                       call mpas_pool_get_field(allFields, itr % memberName, real1d, timeLevel)
-                       hasTimeDimension = real1d % hasTimeDimension
-                       attLists => real1d % attLists
-                       dimNames(1:info%nDims) = real1d % dimNames;
-                       block => real1d % block
-
-                       if (trim(dimNames(1)) == 'nCells') then
-                           array = ESMF_ArrayCreate(distgridCells, rkind_typekind, name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayGet(array, farrayPtr=ptr_rm_d1, rc=rc); ESMF_ERR(rc)
-                           ptr_rm_d1 = real1d % array(1:nCellsSolve)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                           nullify(ptr_rm_d1)
-                       else if (trim(dimNames(1)) == 'nVertices') then
-                           array = ESMF_ArrayCreate(distgridVertices, rkind_typekind, name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayGet(array, farrayPtr=ptr_rm_d1, rc=rc); ESMF_ERR(rc)
-                           ptr_rm_d1 = real1d % array(1:nVerticesSolve)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                           nullify(ptr_rm_d1)
-                       else if (trim(dimNames(1)) == 'nEdges') then
-                           array = ESMF_ArrayCreate(distgridEdges, rkind_typekind, name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayGet(array, farrayPtr=ptr_rm_d1, rc=rc); ESMF_ERR(rc)
-                           ptr_rm_d1 = real1d % array(1:nEdgesSolve)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                           nullify(ptr_rm_d1)
-                       else ! Array has no distributed dimension
-                           call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), values=real1d % array, rc=rc); ESMF_ERR(rc)
-                           if (RKIND == R4KIND) then
-                               call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_real, rc=rc); ESMF_ERR(rc)
-                           else if (RKIND == R8KIND) then
-                               call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_double, rc=rc); ESMF_ERR(rc)
-                           end if
-                           call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
-                       end if
-
-                   case (2)
-                       call mpas_pool_get_field(allFields, itr % memberName, real2d, timeLevel)
-                       hasTimeDimension = real2d % hasTimeDimension
-                       attLists => real2d % attLists
-                       dimNames(1:info%nDims) = real2d % dimNames;
-                       block => real2d % block
-
-                       if (trim(dimNames(info%nDims)) == 'nCells') then
-                           array = ESMF_ArrayCreate(distgridCells, farray=real2d % array(:,1:nCellsSolve), &
-                                                    distgridToArrayMap = (/2/), &
-                                                    indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                    name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                       else if (trim(dimNames(info%nDims)) == 'nVertices') then
-                           array = ESMF_ArrayCreate(distgridVertices, farray=real2d % array(:,1:nVerticesSolve), &
-                                                    distgridToArrayMap = (/2/), &
-                                                    indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                    name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                       else if (trim(dimNames(info%nDims)) == 'nEdges') then
-                           array = ESMF_ArrayCreate(distgridEdges, farray=real2d % array(:,1:nEdgesSolve), &
-                                                    distgridToArrayMap = (/2/), &
-                                                    indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                    name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                       end if
-
-                   case (3)
-                       call mpas_pool_get_field(allFields, itr % memberName, real3d, timeLevel)
-                       hasTimeDimension = real3d % hasTimeDimension
-                       attLists => real3d % attLists
-                       block => real3d % block
-                       decomp_dim_name = trim(real3d % dimNames(info%nDims)) ! save decomp name before stripping num_scalar
-
-                       if (real3d % isVarArray) then
-                           nDims = nDims - 1
-                           dimNames(1:nDims) = real3d % dimNames(2:info % nDims)   ! strip first dimension (num_scalar)
-                           isVarArray = .true.
-
-                           if (hasTimeDimension) then
-                               nDims = nDims + 1
-                               dimNames(nDims:nDims) = 'Time'
-                           end if
-
-                           do k = 1, size(real3d % constituentNames)
-                               if (trim(decomp_dim_name) == 'nCells') then
-                                   array = ESMF_ArrayCreate(distgridCells, farray=real3d % array(k,:,1:nCellsSolve), &
-                                                            distgridToArrayMap = (/2/), &
-                                                            indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                            name=trim(real3d % constituentNames(k)), rc=rc); ESMF_ERR(rc)
-                                   call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                               else if (trim(decomp_dim_name) == 'nVertices') then
-                                   array = ESMF_ArrayCreate(distgridVertices, farray=real3d % array(k,:,1:nVerticesSolve), &
-                                                            distgridToArrayMap = (/2/), &
-                                                            indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                            name=trim(real3d % constituentNames(k)), rc=rc); ESMF_ERR(rc)
-                                   call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                               else if (trim(decomp_dim_name) == 'nEdges') then
-                                   array = ESMF_ArrayCreate(distgridEdges, farray=real3d % array(k,:,1:nEdgesSolve), &
-                                                            distgridToArrayMap = (/2/), &
-                                                            indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                            name=trim(real3d % constituentNames(k)), rc=rc); ESMF_ERR(rc)
-                                   call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                               end if
-
-                               ! write(0,'(A,A,A,A,A)',advance='no') '   ',trim(typeName), ' ', trim(real3d % constituentNames(k)),'('
-                               do i = 1, nDims
-                                 call mpas_pool_get_dimension(block % dimensions, trim(dimNames(i)), dimSize_ptr)
-
-                                 if (associated(dimSize_ptr)) then
-                                     dimSize = dimSize_ptr
-                                 else
-                                     dimSize = -1
-                                 end if
-
-                                 if (trim(dimNames(i)) == 'nCells') then
-                                     dimSize = nCellsGlobal
-                                 else if (trim(dimNames(i)) == 'nEdges') then
-                                     dimSize = nEdgesGlobal
-                                 else if (trim(dimNames(i)) == 'nVertices' ) then
-                                     dimSize = nVerticesGlobal
-                                 else if (trim(dimNames(i)) == 'StrLen' ) then
-                                     dimSize = 64
-                                 else if (trim(dimNames(i)) == 'Time' ) then
-                                     dimSize = 1
-                                 end if
-
-                                 ! write(0,'(A)',advance='no') trim(dimNames(i))
-                                 ! if (i < nDims) write(0,'(A)',advance='no') ', '
-
-                                 if (dimSize >= 0) then
-                                     is_unique = .true.
-                                     do j = 1, size(dim_info_arr)
-                                         if (trim(dimNames(i)) == trim(dim_info_arr(j) % dimName)) then
-                                             if (dimSize /= dim_info_arr(j) % dimSize) then
-                                                write(0,*)'conflictiing dimSize for ', trim(real3d % constituentNames(k)), ' dimension ', trim(dimNames(i)), ' ', dimSize, dim_info_arr(j) % dimSize
-                                                stop 1
-                                             end if
-                                             is_unique = .false.
-                                             exit
-                                         end if
-                                     end do
-                                     ! If unique, append to collection
-                                     if (is_unique) then
-                                         total_unique = size(dim_info_arr)
-                                         call resize_dim_info_array(dim_info_arr, total_unique + 1)
-                                         dim_info_arr(total_unique + 1) % dimName = trim(dimNames(i))
-                                         dim_info_arr(total_unique + 1) % dimSize = dimSize
-                                     end if
-                                 end if
-
-                               end do
-                               ! write(0,'(A)')') ;'
-
-                               call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/variables/'//trim(real3d % constituentNames(k)), values=dimNames(1:nDims), rc=rc); ESMF_ERR(rc)
-
-                               numVars = numVars + 1
-                               variable_names(numVars) = trim(real3d % constituentNames(k))
-
-                               call put_variable_attributes(attLists(k) % attList, trim(real3d % constituentNames(k)), rc=rc); ESMF_ERR(rc)
-                           end do
-                       else
-
-                           dimNames(1:info%nDims) = real3d % dimNames;
-                           if (trim(dimNames(info%nDims)) == 'nCells') then
-                               array = ESMF_ArrayCreate(distgridCells, farray=real3d % array(:,:,1:nCellsSolve), &
-                                                        distgridToArrayMap = (/3/), &
-                                                        indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                        name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                               call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                           else if (trim(dimNames(info%nDims)) == 'nVertices') then
-                               array = ESMF_ArrayCreate(distgridVertices, farray=real3d % array(:,:,1:nVerticesSolve), &
-                                                        distgridToArrayMap = (/3/), &
-                                                        indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                        name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                               call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                           else if (trim(dimNames(info%nDims)) == 'nEdges') then
-                               array = ESMF_ArrayCreate(distgridEdges, farray=real3d % array(:,:,1:nEdgesSolve), &
-                                                        distgridToArrayMap = (/3/), &
-                                                        indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                        name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                               call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                           end if
-                       end if
-
-                   case (4)
-                       call mpas_pool_get_field(allFields, itr % memberName, real4d, timeLevel)
-                       hasTimeDimension = real4d % hasTimeDimension
-                       attLists => real4d % attLists
-                       dimNames(1:info%nDims) = real4d % dimNames;
-                       block => real4d % block
-                   case (5)
-                       call mpas_pool_get_field(allFields, itr % memberName, real5d, timeLevel)
-                       hasTimeDimension = real5d % hasTimeDimension
-                       attLists => real5d % attLists
-                       dimNames(1:info%nDims) = real5d % dimNames;
-                       block => real5d % block
-               end select
-
-           case (MPAS_POOL_INTEGER)
-               typeName = 'int'
-               select case (info % nDims)
-                   case (0)
-                       call mpas_pool_get_field(allFields, itr % memberName, int0d, timeLevel)
-                       hasTimeDimension = int0d % hasTimeDimension
-                       attLists => int0d % attLists
-                       ! no dimNames in 0d
-                       block => int0d % block
-
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), value=int0d % scalar, rc=rc); ESMF_ERR(rc)
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_int, rc=rc); ESMF_ERR(rc)
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
-                   case (1)
-                       call mpas_pool_get_field(allFields, itr % memberName, int1d, timeLevel)
-                       hasTimeDimension = int1d % hasTimeDimension
-                       attLists => int1d % attLists
-                       dimNames(1:info%nDims) = int1d % dimNames;
-                       block => int1d % block
-
-                       if (trim(dimNames(info%nDims)) == 'nCells') then
-                           array = ESMF_ArrayCreate(distgridCells, farray=int1d % array(1:nCellsSolve), &
-                                                    distgridToArrayMap = (/1/), &
-                                                    indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                    name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-
-                       else if (trim(dimNames(info%nDims)) == 'nVertices') then
-                           array = ESMF_ArrayCreate(distgridVertices, farray=int1d % array(1:nVerticesSolve), &
-                                                    distgridToArrayMap = (/1/), &
-                                                    indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                    name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-
-                       else if (trim(dimNames(info%nDims)) == 'nEdges') then
-                           array = ESMF_ArrayCreate(distgridEdges, farray=int1d % array(1:nEdgesSolve), &
-                                                    distgridToArrayMap = (/1/), &
-                                                    indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                    name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-
-                       else ! Array has no distributed dimension
-                           call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), values=int1d % array, rc=rc); ESMF_ERR(rc)
-                           call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_int, rc=rc); ESMF_ERR(rc)
-                           call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
-                       end if
-
-                   case (2)
-                       call mpas_pool_get_field(allFields, itr % memberName, int2d, timeLevel)
-                       hasTimeDimension = int2d % hasTimeDimension
-                       attLists => int2d % attLists
-                       dimNames(1:info%nDims) = int2d % dimNames;
-                       block => int2d % block
-
-                       if (trim(dimNames(info%nDims)) == 'nCells') then
-                           array = ESMF_ArrayCreate(distgridCells, farray=int2d % array(:,1:nCellsSolve), &
-                                                    distgridToArrayMap = (/2/), &
-                                                    indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                    name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                       else if (trim(dimNames(info%nDims)) == 'nVertices') then
-                           array = ESMF_ArrayCreate(distgridVertices, farray=int2d % array(:,1:nVerticesSolve), &
-                                                    distgridToArrayMap = (/2/), &
-                                                    indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                    name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                       else if (trim(dimNames(info%nDims)) == 'nEdges') then
-                           array = ESMF_ArrayCreate(distgridEdges, farray=int2d % array(:,1:nEdgesSolve), &
-                                                    distgridToArrayMap = (/2/), &
-                                                    indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
-                                                    name=trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-                           call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
-                      end if
-
-                   case (3)
-                       call mpas_pool_get_field(allFields, itr % memberName, int3d, timeLevel)
-                       hasTimeDimension = int3d % hasTimeDimension
-                       attLists => int3d % attLists
-                       dimNames(1:info%nDims) = int3d % dimNames;
-                       block => int3d % block
-               end select
-
-           case (MPAS_POOL_CHARACTER)
-               typeName = 'char'
-               select case (info % nDims)
-                   case (0)
-                       call mpas_pool_get_field(allFields, itr % memberName, char0d, timeLevel)
-                       hasTimeDimension = char0d % hasTimeDimension
-                       attLists => char0d % attLists
-                       ! no dimNames in 0d
-                       nDims = nDims + 1
-                       dimNames(nDims:nDims) = 'StrLen'
-                       block => char0d % block
-
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), value=trim(char0d % scalar), rc=rc); ESMF_ERR(rc)
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_char, rc=rc); ESMF_ERR(rc)
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
-
-                   case (1)
-                       call mpas_pool_get_field(allFields, itr % memberName, char1d, timeLevel)
-                       hasTimeDimension = char1d % hasTimeDimension
-                       attLists => char1d % attLists
-                       dimNames(1:info%nDims) = char1d % dimNames;
-                       nDims = nDims + 1
-                       dimNames(nDims:nDims) = 'StrLen'
-                       block => char1d % block
-               end select
-           end select
-
-           if (.not. isVarArray) then
-
-               if (hasTimeDimension) then
-                   nDims = nDims + 1
-                   dimNames(nDims:nDims) = 'Time'
-               end if
-
-               ! write(0,'(A,A,A,A,A)',advance='no') '   ',trim(typeName), ' ', trim(itr % memberName),'('
-               do i = 1, nDims
-                 call mpas_pool_get_dimension(block % dimensions, trim(dimNames(i)), dimSize_ptr)
-
-                 if (associated(dimSize_ptr)) then
-                     dimSize = dimSize_ptr
-                 else
-                     dimSize = -1
-                 end if
-
-                 if (trim(dimNames(i)) == 'nCells') then
-                     dimSize = nCellsGlobal
-                 else if (trim(dimNames(i)) == 'nEdges') then
-                     dimSize = nEdgesGlobal
-                 else if (trim(dimNames(i)) == 'nVertices' ) then
-                     dimSize = nVerticesGlobal
-                 else if (trim(dimNames(i)) == 'StrLen' ) then
-                     dimSize = 64
-                 else if (trim(dimNames(i)) == 'Time' ) then
-                     dimSize = 1
-                 end if
-
-                 ! write(0,'(A)',advance='no') trim(dimNames(i))
-                 ! if (i < nDims) write(0,'(A)',advance='no') ', '
-
-                 if (dimSize >= 0) then
-                     is_unique = .true.
-                     do j = 1, size(dim_info_arr)
-                         if (trim(dimNames(i)) == trim(dim_info_arr(j) % dimName)) then
-                             if (dimSize /= dim_info_arr(j) % dimSize) then
-                                write(0,*)'conflictiing dimSize for ', trim(itr % memberName), ' dimension ', trim(dimNames(i)), ' ', dimSize, dim_info_arr(j) % dimSize
-                                stop 1
-                             end if
-                             is_unique = .false.
-                             exit
-                         end if
-                     end do
-                     ! If unique, append to collection
-                     if (is_unique) then
-                         total_unique = size(dim_info_arr)
-                         call resize_dim_info_array(dim_info_arr, total_unique + 1)
-                         dim_info_arr(total_unique + 1) % dimName = trim(dimNames(i))
-                         dim_info_arr(total_unique + 1) % dimSize = dimSize
-                     end if
-                 end if
-
-               end do
-               ! write(0,'(A)')') ;'
-
-               call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/variables/'//trim(itr % memberName), values=dimNames(1:nDims), rc=rc); ESMF_ERR(rc)
-
-               numVars = numVars + 1
-               variable_names(numVars) = trim(itr % memberName)
-
-               call put_variable_attributes(attLists(1) % attList, trim(itr % memberName), rc=rc); ESMF_ERR(rc)
-           end if ! .not. isVarArray
-
-           nullify(attLists)
-
+           fields_to_write(nfields) = trim(itr % memberName)
        end if
 
-   end do FIELD_LOOP
+   end do SEARCH_LOOP
+
+   if (trim(stream_name) == 'restart' .and. skip_invariant) then
+      nfields = nfields + 1
+      fields_to_write(nfields) = 'indexToCellID'
+
+      nfields = nfields + 1
+      fields_to_write(nfields) = 'indexToVertexID'
+
+      nfields = nfields + 1
+      fields_to_write(nfields) = 'indexToEdgeID'
+   end if ! if (trim(stream_name) == 'restart') then
+
+
+   do n = 1, nfields
+
+      var_name = fields_to_write(n)
+
+      info % fieldType = -1
+
+      call mpas_pool_get_field_info(allFields, var_name, info)
+
+      ! if (trim(var_name) == 'scalars') cycle FIELD_LOOP
+
+      ! Set time level to read
+      if (info % nTimeLevels >= timeLevelIn) then
+          timeLevel = timeLevelIn
+      else
+          timeLevel = 1
+      end if
+
+      hasTimeDimension = .false.
+      attLists => null()
+      dimNames = ''
+      nDims = info % nDims
+      isVarArray = .false.
+
+      select case (info % fieldType)
+      case (MPAS_POOL_REAL)
+          typeName = 'float'
+          select case (info % nDims)
+              case (0)
+                  call mpas_pool_get_field(allFields, var_name, real0d, timeLevel)
+                  hasTimeDimension = real0d % hasTimeDimension
+                  attLists => real0d % attLists
+                  ! no dimNames in 0d
+                  block => real0d % block
+
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name), value=real0d % scalar, rc=rc); ESMF_ERR(rc)
+                  if (RKIND == R4KIND) then
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_real, rc=rc); ESMF_ERR(rc)
+                  else if (RKIND == R8KIND) then
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_double, rc=rc); ESMF_ERR(rc)
+                  end if
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
+
+              case (1)
+                  call mpas_pool_get_field(allFields, var_name, real1d, timeLevel)
+                  hasTimeDimension = real1d % hasTimeDimension
+                  attLists => real1d % attLists
+                  dimNames(1:info%nDims) = real1d % dimNames;
+                  block => real1d % block
+
+                  if (trim(dimNames(1)) == 'nCells') then
+                      array = ESMF_ArrayCreate(distgridCells, rkind_typekind, name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayGet(array, farrayPtr=ptr_rm_d1, rc=rc); ESMF_ERR(rc)
+                      ptr_rm_d1 = real1d % array(1:nCellsSolve)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                      nullify(ptr_rm_d1)
+                  else if (trim(dimNames(1)) == 'nVertices') then
+                      array = ESMF_ArrayCreate(distgridVertices, rkind_typekind, name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayGet(array, farrayPtr=ptr_rm_d1, rc=rc); ESMF_ERR(rc)
+                      ptr_rm_d1 = real1d % array(1:nVerticesSolve)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                      nullify(ptr_rm_d1)
+                  else if (trim(dimNames(1)) == 'nEdges') then
+                      array = ESMF_ArrayCreate(distgridEdges, rkind_typekind, name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayGet(array, farrayPtr=ptr_rm_d1, rc=rc); ESMF_ERR(rc)
+                      ptr_rm_d1 = real1d % array(1:nEdgesSolve)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                      nullify(ptr_rm_d1)
+                  else ! Array has no distributed dimension
+                      call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name), values=real1d % array, rc=rc); ESMF_ERR(rc)
+                      if (RKIND == R4KIND) then
+                          call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_real, rc=rc); ESMF_ERR(rc)
+                      else if (RKIND == R8KIND) then
+                          call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_double, rc=rc); ESMF_ERR(rc)
+                      end if
+                      call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
+                  end if
+
+              case (2)
+                  call mpas_pool_get_field(allFields, var_name, real2d, timeLevel)
+                  hasTimeDimension = real2d % hasTimeDimension
+                  attLists => real2d % attLists
+                  dimNames(1:info%nDims) = real2d % dimNames;
+                  block => real2d % block
+
+                  if (trim(dimNames(info%nDims)) == 'nCells') then
+                      array = ESMF_ArrayCreate(distgridCells, farray=real2d % array(:,1:nCellsSolve), &
+                                               distgridToArrayMap = (/2/), &
+                                               indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                               name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                  else if (trim(dimNames(info%nDims)) == 'nVertices') then
+                      array = ESMF_ArrayCreate(distgridVertices, farray=real2d % array(:,1:nVerticesSolve), &
+                                               distgridToArrayMap = (/2/), &
+                                               indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                               name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                  else if (trim(dimNames(info%nDims)) == 'nEdges') then
+                      array = ESMF_ArrayCreate(distgridEdges, farray=real2d % array(:,1:nEdgesSolve), &
+                                               distgridToArrayMap = (/2/), &
+                                               indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                               name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                  end if
+
+              case (3)
+                  call mpas_pool_get_field(allFields, var_name, real3d, timeLevel)
+                  hasTimeDimension = real3d % hasTimeDimension
+                  attLists => real3d % attLists
+                  block => real3d % block
+                  decomp_dim_name = trim(real3d % dimNames(info%nDims)) ! save decomp name before stripping num_scalar
+
+                  if (real3d % isVarArray) then
+                      nDims = nDims - 1
+                      dimNames(1:nDims) = real3d % dimNames(2:info % nDims)   ! strip first dimension (num_scalar)
+                      isVarArray = .true.
+
+                      if (hasTimeDimension) then
+                          nDims = nDims + 1
+                          dimNames(nDims:nDims) = 'Time'
+                      end if
+
+                      do k = 1, size(real3d % constituentNames)
+                          if (trim(decomp_dim_name) == 'nCells') then
+                              array = ESMF_ArrayCreate(distgridCells, farray=real3d % array(k,:,1:nCellsSolve), &
+                                                       distgridToArrayMap = (/2/), &
+                                                       indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                       name=trim(real3d % constituentNames(k)), rc=rc); ESMF_ERR(rc)
+                              call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                          else if (trim(decomp_dim_name) == 'nVertices') then
+                              array = ESMF_ArrayCreate(distgridVertices, farray=real3d % array(k,:,1:nVerticesSolve), &
+                                                       distgridToArrayMap = (/2/), &
+                                                       indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                       name=trim(real3d % constituentNames(k)), rc=rc); ESMF_ERR(rc)
+                              call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                          else if (trim(decomp_dim_name) == 'nEdges') then
+                              array = ESMF_ArrayCreate(distgridEdges, farray=real3d % array(k,:,1:nEdgesSolve), &
+                                                       distgridToArrayMap = (/2/), &
+                                                       indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                       name=trim(real3d % constituentNames(k)), rc=rc); ESMF_ERR(rc)
+                              call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                          end if
+
+                          ! write(0,'(A,A,A,A,A)',advance='no') '   ',trim(typeName), ' ', trim(real3d % constituentNames(k)),'('
+                          do i = 1, nDims
+                            call mpas_pool_get_dimension(block % dimensions, trim(dimNames(i)), dimSize_ptr)
+
+                            if (associated(dimSize_ptr)) then
+                                dimSize = dimSize_ptr
+                            else
+                                dimSize = -1
+                            end if
+
+                            if (trim(dimNames(i)) == 'nCells') then
+                                dimSize = nCellsGlobal
+                            else if (trim(dimNames(i)) == 'nEdges') then
+                                dimSize = nEdgesGlobal
+                            else if (trim(dimNames(i)) == 'nVertices' ) then
+                                dimSize = nVerticesGlobal
+                            else if (trim(dimNames(i)) == 'StrLen' ) then
+                                dimSize = 64
+                            else if (trim(dimNames(i)) == 'Time' ) then
+                                dimSize = 1
+                            end if
+
+                            ! write(0,'(A)',advance='no') trim(dimNames(i))
+                            ! if (i < nDims) write(0,'(A)',advance='no') ', '
+
+                            if (dimSize >= 0) then
+                                is_unique = .true.
+                                do j = 1, size(dim_info_arr)
+                                    if (trim(dimNames(i)) == trim(dim_info_arr(j) % dimName)) then
+                                        if (dimSize /= dim_info_arr(j) % dimSize) then
+                                           write(0,*)'conflictiing dimSize for ', trim(real3d % constituentNames(k)), ' dimension ', trim(dimNames(i)), ' ', dimSize, dim_info_arr(j) % dimSize
+                                           stop 1
+                                        end if
+                                        is_unique = .false.
+                                        exit
+                                    end if
+                                end do
+                                ! If unique, append to collection
+                                if (is_unique) then
+                                    total_unique = size(dim_info_arr)
+                                    call resize_dim_info_array(dim_info_arr, total_unique + 1)
+                                    dim_info_arr(total_unique + 1) % dimName = trim(dimNames(i))
+                                    dim_info_arr(total_unique + 1) % dimSize = dimSize
+                                end if
+                            end if
+
+                          end do
+                          ! write(0,'(A)')') ;'
+
+                          call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/variables/'//trim(real3d % constituentNames(k)), values=dimNames(1:nDims), rc=rc); ESMF_ERR(rc)
+
+                          numVars = numVars + 1
+                          variable_names(numVars) = trim(real3d % constituentNames(k))
+
+                          call put_variable_attributes(attLists(k) % attList, trim(real3d % constituentNames(k)), rc=rc); ESMF_ERR(rc)
+                      end do
+                  else
+
+                      dimNames(1:info%nDims) = real3d % dimNames;
+                      if (trim(dimNames(info%nDims)) == 'nCells') then
+                          array = ESMF_ArrayCreate(distgridCells, farray=real3d % array(:,:,1:nCellsSolve), &
+                                                   distgridToArrayMap = (/3/), &
+                                                   indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                   name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                          call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                      else if (trim(dimNames(info%nDims)) == 'nVertices') then
+                          array = ESMF_ArrayCreate(distgridVertices, farray=real3d % array(:,:,1:nVerticesSolve), &
+                                                   distgridToArrayMap = (/3/), &
+                                                   indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                   name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                          call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                      else if (trim(dimNames(info%nDims)) == 'nEdges') then
+                          array = ESMF_ArrayCreate(distgridEdges, farray=real3d % array(:,:,1:nEdgesSolve), &
+                                                   distgridToArrayMap = (/3/), &
+                                                   indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                                   name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                          call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                      end if
+                  end if
+
+              case (4)
+                  call mpas_pool_get_field(allFields, var_name, real4d, timeLevel)
+                  hasTimeDimension = real4d % hasTimeDimension
+                  attLists => real4d % attLists
+                  dimNames(1:info%nDims) = real4d % dimNames;
+                  block => real4d % block
+              case (5)
+                  call mpas_pool_get_field(allFields, var_name, real5d, timeLevel)
+                  hasTimeDimension = real5d % hasTimeDimension
+                  attLists => real5d % attLists
+                  dimNames(1:info%nDims) = real5d % dimNames;
+                  block => real5d % block
+          end select
+
+      case (MPAS_POOL_INTEGER)
+          typeName = 'int'
+          select case (info % nDims)
+              case (0)
+                  call mpas_pool_get_field(allFields, var_name, int0d, timeLevel)
+                  hasTimeDimension = int0d % hasTimeDimension
+                  attLists => int0d % attLists
+                  ! no dimNames in 0d
+                  block => int0d % block
+
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name), value=int0d % scalar, rc=rc); ESMF_ERR(rc)
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_int, rc=rc); ESMF_ERR(rc)
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
+              case (1)
+                  call mpas_pool_get_field(allFields, var_name, int1d, timeLevel)
+                  hasTimeDimension = int1d % hasTimeDimension
+                  attLists => int1d % attLists
+                  dimNames(1:info%nDims) = int1d % dimNames;
+                  block => int1d % block
+
+                  if (trim(dimNames(info%nDims)) == 'nCells') then
+                      array = ESMF_ArrayCreate(distgridCells, farray=int1d % array(1:nCellsSolve), &
+                                               distgridToArrayMap = (/1/), &
+                                               indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                               name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+
+                  else if (trim(dimNames(info%nDims)) == 'nVertices') then
+                      array = ESMF_ArrayCreate(distgridVertices, farray=int1d % array(1:nVerticesSolve), &
+                                               distgridToArrayMap = (/1/), &
+                                               indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                               name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+
+                  else if (trim(dimNames(info%nDims)) == 'nEdges') then
+                      array = ESMF_ArrayCreate(distgridEdges, farray=int1d % array(1:nEdgesSolve), &
+                                               distgridToArrayMap = (/1/), &
+                                               indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                               name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+
+                  else ! Array has no distributed dimension
+                      call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name), values=int1d % array, rc=rc); ESMF_ERR(rc)
+                      call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_int, rc=rc); ESMF_ERR(rc)
+                      call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
+                  end if
+
+              case (2)
+                  call mpas_pool_get_field(allFields, var_name, int2d, timeLevel)
+                  hasTimeDimension = int2d % hasTimeDimension
+                  attLists => int2d % attLists
+                  dimNames(1:info%nDims) = int2d % dimNames;
+                  block => int2d % block
+
+                  if (trim(dimNames(info%nDims)) == 'nCells') then
+                      array = ESMF_ArrayCreate(distgridCells, farray=int2d % array(:,1:nCellsSolve), &
+                                               distgridToArrayMap = (/2/), &
+                                               indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                               name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                  else if (trim(dimNames(info%nDims)) == 'nVertices') then
+                      array = ESMF_ArrayCreate(distgridVertices, farray=int2d % array(:,1:nVerticesSolve), &
+                                               distgridToArrayMap = (/2/), &
+                                               indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                               name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                  else if (trim(dimNames(info%nDims)) == 'nEdges') then
+                      array = ESMF_ArrayCreate(distgridEdges, farray=int2d % array(:,1:nEdgesSolve), &
+                                               distgridToArrayMap = (/2/), &
+                                               indexflag=ESMF_INDEX_DELOCAL, datacopyflag=ESMF_DATACOPY_VALUE, &
+                                               name=trim(var_name), rc=rc); ESMF_ERR(rc)
+                      call ESMF_ArrayBundleAdd(output_bundle,(/array/), rc=rc); ESMF_ERR(rc)
+                 end if
+
+              case (3)
+                  call mpas_pool_get_field(allFields, var_name, int3d, timeLevel)
+                  hasTimeDimension = int3d % hasTimeDimension
+                  attLists => int3d % attLists
+                  dimNames(1:info%nDims) = int3d % dimNames;
+                  block => int3d % block
+          end select
+
+      case (MPAS_POOL_CHARACTER)
+          typeName = 'char'
+          select case (info % nDims)
+              case (0)
+                  call mpas_pool_get_field(allFields, var_name, char0d, timeLevel)
+                  hasTimeDimension = char0d % hasTimeDimension
+                  attLists => char0d % attLists
+                  ! no dimNames in 0d
+                  nDims = nDims + 1
+                  dimNames(nDims:nDims) = 'StrLen'
+                  block => char0d % block
+
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name), value=trim(char0d % scalar), rc=rc); ESMF_ERR(rc)
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_char, rc=rc); ESMF_ERR(rc)
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
+
+              case (1)
+                  call mpas_pool_get_field(allFields, var_name, char1d, timeLevel)
+                  hasTimeDimension = char1d % hasTimeDimension
+                  attLists => char1d % attLists
+                  dimNames(1:info%nDims) = char1d % dimNames;
+                  nDims = nDims + 1
+                  dimNames(nDims:nDims) = 'StrLen'
+                  block => char1d % block
+          end select
+      end select
+
+      if (.not. isVarArray) then
+
+          if (hasTimeDimension) then
+              nDims = nDims + 1
+              dimNames(nDims:nDims) = 'Time'
+          end if
+
+          ! write(0,'(A,A,A,A,A)',advance='no') '   ',trim(typeName), ' ', trim(var_name),'('
+          do i = 1, nDims
+            call mpas_pool_get_dimension(block % dimensions, trim(dimNames(i)), dimSize_ptr)
+
+            if (associated(dimSize_ptr)) then
+                dimSize = dimSize_ptr
+            else
+                dimSize = -1
+            end if
+
+            if (trim(dimNames(i)) == 'nCells') then
+                dimSize = nCellsGlobal
+            else if (trim(dimNames(i)) == 'nEdges') then
+                dimSize = nEdgesGlobal
+            else if (trim(dimNames(i)) == 'nVertices' ) then
+                dimSize = nVerticesGlobal
+            else if (trim(dimNames(i)) == 'StrLen' ) then
+                dimSize = 64
+            else if (trim(dimNames(i)) == 'Time' ) then
+                dimSize = 1
+            end if
+
+            if (dimSize >= 0) then
+                is_unique = .true.
+                do j = 1, size(dim_info_arr)
+                    if (trim(dimNames(i)) == trim(dim_info_arr(j) % dimName)) then
+                        if (dimSize /= dim_info_arr(j) % dimSize) then
+                           write(0,*)'conflictiing dimSize for ', trim(var_name), ' dimension ', trim(dimNames(i)), ' ', dimSize, dim_info_arr(j) % dimSize
+                           stop 1
+                        end if
+                        is_unique = .false.
+                        exit
+                    end if
+                end do
+                ! If unique, append to collection
+                if (is_unique) then
+                    total_unique = size(dim_info_arr)
+                    call resize_dim_info_array(dim_info_arr, total_unique + 1)
+                    dim_info_arr(total_unique + 1) % dimName = trim(dimNames(i))
+                    dim_info_arr(total_unique + 1) % dimSize = dimSize
+                end if
+            end if
+
+          end do
+
+          call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/variables/'//trim(var_name), values=dimNames(1:nDims), rc=rc); ESMF_ERR(rc)
+
+          numVars = numVars + 1
+          variable_names(numVars) = trim(var_name)
+
+          call put_variable_attributes(attLists(1) % attList, trim(var_name), rc=rc); ESMF_ERR(rc)
+      end if ! .not. isVarArray
+
+      nullify(attLists)
+
+   end do ! n = 1, nfields
+
    call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/variable_names', values=variable_names(1:numVars), rc=rc); ESMF_ERR(rc)
 
    ! dimensions attributes
    allocate(dimension_names(size(dim_info_arr)))
    do i = 1, size(dim_info_arr)
-       ! write(0,*)trim(dim_info_arr(i) % dimName), ' ', dim_info_arr(i) % dimSize
        call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/dimensions/'//trim(dim_info_arr(i) % dimName), value=dim_info_arr(i) % dimSize, rc=rc); ESMF_ERR(rc)
        dimension_names(i)=trim(dim_info_arr(i) % dimName)
    end do
@@ -2464,25 +2494,20 @@ contains
            global_att_names(numGlobalAtts)=trim(itr % memberName)
            if ( itr % dataType == MPAS_POOL_REAL ) then
                call mpas_pool_get_config(stream % att_pool, itr % memberName, realAtt)
-               ! write(0,*)'config: ', trim(itr % memberName), ' ', realAtt
                call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/global_att/'//trim(itr % memberName), value=realAtt, rc=rc); ESMF_ERR(rc)
 
            else if ( itr % dataType == MPAS_POOL_INTEGER ) then
                call mpas_pool_get_config(stream % att_pool, itr % memberName, intAtt)
-               ! write(0,*)'config: ', trim(itr % memberName), ' ', intAtt
                call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/global_att/'//trim(itr % memberName), value=intAtt, rc=rc); ESMF_ERR(rc)
 
            else if ( itr % dataType == MPAS_POOL_CHARACTER ) then
                call mpas_pool_get_config(stream % att_pool, itr % memberName, charAtt)
-               ! write(0,*)'config: ', trim(itr % memberName), ' ', trim(charAtt)
                call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/global_att/'//trim(itr % memberName), value=trim(charAtt), rc=rc); ESMF_ERR(rc)
            else if ( itr % dataType == MPAS_POOL_LOGICAL ) then
                call mpas_pool_get_config(stream % att_pool, itr % memberName, logAtt)
                if (logAtt) then
-                   ! write(0,*)'config: ', trim(itr % memberName), ' YES'
                    call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/global_att/'//trim(itr % memberName), value='YES', rc=rc); ESMF_ERR(rc)
                else
-                   ! write(0,*)'config: ', trim(itr % memberName), ' NO'
                    call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/global_att/'//trim(itr % memberName), value='NO', rc=rc); ESMF_ERR(rc)
                end if
            end if
@@ -2544,7 +2569,6 @@ contains
                     ! write (0,'(A,A,A,A)' ) '       ',trim(varName)//':'//trim(att_cursor % attName)//' = "', trim(att_cursor % attValueText), '" ;'
                     call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/variables/'//trim(varName)//':'//trim(att_cursor % attName), value=trim(att_cursor % attValueText), rc=rc); ESMF_ERR(rc)
                  else
-                    ! write(0,*) i, '"'//trim(att_cursor % attName)//'" unknown type ', att_cursor % attType
                  end if
                  numAtts = numAtts + 1
                  att_names(numAtts) = trim(att_cursor % attName)
@@ -2555,6 +2579,11 @@ contains
            call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/variables/'//trim(varName)//'_att_names', values=att_names(1:numAtts), rc=rc); ESMF_ERR(rc)
 
            nullify(att_cursor)
+
+           if ((trim(varName) == 'indexToCellID' .or. trim(varName) == 'indexToVertexID' .or. trim(varName) == 'indexToEdgeID') .and. skip_invariant) then
+               call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/variables/'//trim(varName)//':'//'do_not_write', value='true', rc=rc); ESMF_ERR(rc)
+           end if
+
        end subroutine put_variable_attributes
 
  end subroutine ufs_mpas_create_restart_array_bundle
@@ -2563,12 +2592,12 @@ contains
 
    use mpas_derived_types, only : mpas_pool_field_info_type, mpas_pool_real, mpas_pool_integer, &
                                   mpas_stream_list_type, mpas_pool_type, mpas_pool_iterator_type, &
-                                  MPAS_POOL_CONFIG, MPAS_POOL_REAL, MPAS_POOL_INTEGER, MPAS_POOL_CHARACTER, &
+                                  MPAS_POOL_SILENT, MPAS_POOL_CONFIG, MPAS_POOL_REAL, MPAS_POOL_INTEGER, MPAS_POOL_CHARACTER, &
                                   field5DReal, field4DReal, field3DReal, field2DReal, field1DReal, field0DReal, &
                                   field3DInteger, field2DInteger, field1DInteger, field0DInteger, field1DChar, field0DChar
 
    use mpas_pool_routines, only : pool_print_members, mpas_pool_get_field, mpas_pool_get_field_info, mpas_pool_get_subpool, &
-                                  mpas_pool_get_next_member, mpas_pool_begin_iteration
+                                  mpas_pool_get_config, mpas_pool_set_error_level, mpas_pool_get_error_level, mpas_pool_get_next_member, mpas_pool_begin_iteration
    use mpas_stream_manager,only : prewrite_reindex, postwrite_reindex
    use mpas_stream_list,   only : MPAS_stream_list_query
    use mpas_log,           only : mpas_log_write
@@ -2619,6 +2648,10 @@ contains
    type (field1DChar), pointer :: char1d
    type (field0DChar), pointer :: char0d
 
+   character (len=StrKIND), pointer :: packages
+   logical :: active_field
+   integer :: err_level
+
    rc = 0
 
    ! Look at 'restart' stream
@@ -2640,6 +2673,20 @@ contains
 
 
        if (itr % memberType == MPAS_POOL_CONFIG) then
+
+           err_level = mpas_pool_get_error_level()
+           call mpas_pool_set_error_level(MPAS_POOL_SILENT)
+
+           nullify(packages)
+           call mpas_pool_get_config(stream % field_pkg_pool, trim(itr % memberName)//':packages', packages)
+           if (associated(packages)) then
+               active_field = parse_package_list(allPackages, trim(packages))
+           else
+               active_field = .true.
+           end if
+           call mpas_pool_set_error_level(err_level)
+
+           if (.not. active_field) cycle FIELD_LOOP
 
            ! To avoid accidentally matching in case statements below...
            info % fieldType = -1
