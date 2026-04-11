@@ -1902,17 +1902,9 @@ contains
    character(len=64), dimension(max_fields_to_write) :: fields_to_write
    character(len=64) :: var_name
    integer :: n, nfields
-   logical :: skip_invariant
+   logical :: indexToCellID_present, indexToVertexID_present, indexToEdgeID_present
 
    rc = 0
-
-   skip_invariant = .false.
-
-   ! Check if 'invariant' stream is valid (active)
-   nullify(stream)
-   if (MPAS_stream_list_query(domain_ptr % streamManager % streams, 'invariant', stream, ierr=ierr)) then
-      skip_invariant =  stream % valid
-   endif
 
    nullify(stream)
    if (.not. MPAS_stream_list_query(domain_ptr % streamManager % streams, trim(stream_name), stream, ierr=ierr)) then
@@ -2015,6 +2007,9 @@ contains
    numVars = 0
 
    nfields = 0
+   indexToCellID_present = .false.
+   indexToVertexID_present = .false.
+   indexToEdgeID_present = .false.
    call mpas_pool_begin_iteration(stream % field_pool)
    SEARCH_LOOP: do while ( mpas_pool_get_next_member(stream % field_pool, itr) )
 
@@ -2037,20 +2032,30 @@ contains
            nfields = nfields + 1
 
            fields_to_write(nfields) = trim(itr % memberName)
+
+           if (trim(itr % memberName) == 'indexToCellID')   indexToCellID_present =.true.
+           if (trim(itr % memberName) == 'indexToVertexID') indexToVertexID_present =.true.
+           if (trim(itr % memberName) == 'indexToEdgeID')   indexToEdgeID_present =.true.
        end if
 
    end do SEARCH_LOOP
 
-   if (trim(stream_name) == 'restart' .and. skip_invariant) then
+   ! Add three indexTo....ID fields explicitly because they are needed in write routines
+   ! to specify arrays decomposition
+   if (.not. indexToCellID_present) then
       nfields = nfields + 1
       fields_to_write(nfields) = 'indexToCellID'
+   end if
 
+   if (.not. indexToVertexID_present) then
       nfields = nfields + 1
       fields_to_write(nfields) = 'indexToVertexID'
+   end if
 
+   if (.not. indexToEdgeID_present) then
       nfields = nfields + 1
       fields_to_write(nfields) = 'indexToEdgeID'
-   end if ! if (trim(stream_name) == 'restart') then
+   end if
 
 
    do n = 1, nfields
@@ -2060,8 +2065,6 @@ contains
       info % fieldType = -1
 
       call mpas_pool_get_field_info(allFields, var_name, info)
-
-      ! if (trim(var_name) == 'scalars') cycle FIELD_LOOP
 
       ! Set time level to read
       if (info % nTimeLevels >= timeLevelIn) then
@@ -2580,7 +2583,9 @@ contains
 
            nullify(att_cursor)
 
-           if ((trim(varName) == 'indexToCellID' .or. trim(varName) == 'indexToVertexID' .or. trim(varName) == 'indexToEdgeID') .and. skip_invariant) then
+           if ((trim(varName) == 'indexToCellID' .and. .not. indexToCellID_present) .or. &
+               (trim(varName) == 'indexToVertexID' .and. .not. indexToVertexID_present) .or. &
+               (trim(varName) == 'indexToEdgeID' .and. .not. indexToEdgeID_present)) then
                call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3/variables/'//trim(varName)//':'//'do_not_write', value='true', rc=rc); ESMF_ERR(rc)
            end if
 

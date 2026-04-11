@@ -12,4 +12,6 @@ add_definitions(-DMPAS_USE_MPI_F08)
 
 add_subdirectory(MPAS-Model)
 
+target_sources(core_atmosphere PRIVATE MPAS-Model/src/external/esmf_time_f90/wrf_error_fatal.F90)
+
 add_library(mpas ALIAS core_atmosphere)
