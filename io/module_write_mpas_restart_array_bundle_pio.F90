@@ -111,7 +111,6 @@ module module_write_mpas_restart_array_bundle_pio
       integer :: pio_type
       integer, allocatable :: array_shape(:)
       integer, allocatable :: array_index(:)
-      ! integer, allocatable :: compdof(:)
       type (io_desc_t) :: iodesc
     end type decomp_info_t
     integer, parameter :: max_decomp_info_arr = 30
@@ -125,15 +124,12 @@ module module_write_mpas_restart_array_bundle_pio
     type(iosystem_desc_t) :: pioIoSystem(1)
     type(file_desc_t)     :: pioFileDesc
     type(var_desc_t)      :: pioVar
-    ! type(io_desc_t)       :: iodescCells, iodescVertices, iodescEdges
     integer               :: iotype
     integer               :: pio_type
-    ! integer, allocatable  :: compdof(:)
-    ! integer :: nCells, nVertices, nEdges
-    logical :: added_time_dim
-    logical :: isDecomposed
-    logical :: isPresent
-    integer :: i1, i2, i3, i4, i5
+    logical               :: added_time_dim
+    logical               :: isDecomposed
+    logical               :: isPresent
+    integer               :: i1, i2, i3, i4, i5
     character(len=64), allocatable :: var_att_names(:)
     character(len=512) :: key
     integer(kind=pio_offset_kind) :: frame=1
@@ -180,21 +176,14 @@ module module_write_mpas_restart_array_bundle_pio
     ! Gather information about variables
     call ESMF_InfoGetAlloc(bundle_info, key='/NetCDF/FV3/variable_names', values=variable_names, itemCount=var_count, rc=rc); ESMF_ERR(rc)
 
-    ! call ESMF_InfoGet(bundle_info, key='/MPAS/nCells', value=nCells, rc=rc); ESMF_ERR(rc)
-    ! call ESMF_InfoGet(bundle_info, key='/MPAS/nVertices', value=nVertices, rc=rc); ESMF_ERR(rc)
-    ! call ESMF_InfoGet(bundle_info, key='/MPAS/nEdges', value=nEdges, rc=rc); ESMF_ERR(rc)
-
     call ESMF_ArrayBundleGet(wrtfb, arrayName='indexToCellID', array=array_indexToCellID, rc=rc); ESMF_ERR_RETURN(rc)
     call ESMF_ArrayGet(array_indexToCellID, localDe=0, farrayPtr=array_cellid, rc=rc); ESMF_ERR_RETURN(rc)
-    ! call PIO_initdecomp(pioIoSystem(1), PIO_int, [nCells], array_cellid, iodescCells)
 
     call ESMF_ArrayBundleGet(wrtfb, arrayName='indexToVertexID', array=array_indexToVertexID, rc=rc); ESMF_ERR_RETURN(rc)
     call ESMF_ArrayGet(array_indexToVertexID, localDe=0, farrayPtr=array_vertexid, rc=rc); ESMF_ERR_RETURN(rc)
-    ! call PIO_initdecomp(pioIoSystem(1), PIO_int, [nVertices], array_vertexid, iodescVertices)
 
     call ESMF_ArrayBundleGet(wrtfb, arrayName='indexToEdgeID', array=array_indexToEdgeID, rc=rc); ESMF_ERR_RETURN(rc)
     call ESMF_ArrayGet(array_indexToEdgeID, localDe=0, farrayPtr=array_edgeid, rc=rc); ESMF_ERR_RETURN(rc)
-    ! call PIO_initdecomp(pioIoSystem(1), PIO_int, [nEdges], array_edgeid, iodescEdges)
 
     ! Gather information about variables
     allocate(var_info_arr(var_count))
@@ -661,9 +650,9 @@ module module_write_mpas_restart_array_bundle_pio
 
     call PIO_closefile(pioFileDesc)
 
-    ! call PIO_freedecomp(pioIoSystem(1), iodescCells)
-    ! call PIO_freedecomp(pioIoSystem(1), iodescVertices)
-    ! call PIO_freedecomp(pioIoSystem(1), iodescEdges)
+    do n=1,num_decomp_info_array
+       call PIO_freedecomp(pioIoSystem(1), decomp_info_arr(n) % iodesc)
+    end do
 
     call PIO_finalize(pioIoSystem(1), ierr)
 
