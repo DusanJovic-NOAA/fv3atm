@@ -8,7 +8,11 @@
 
 module ufs_mpas_wgc_output
 
+#ifdef MPAS_USE_MPI_F08
   use mpi_f08
+#else
+  use mpi
+#endif
   use esmf
   use pio, only : PIO_int, PIO_real, PIO_double, PIO_char
 
@@ -1890,7 +1894,11 @@ contains
    type (field_list_type), pointer :: fieldList, field_cursor
    integer :: ierr
    integer :: nprocs, localpet, minIndexPTileCells, maxIndexPTileCells, dimCount, deCount
+#ifdef MPAS_USE_MPI_F08
    TYPE(mpi_comm) :: comm
+#else
+   integer :: comm
+#endif
    integer, allocatable :: cell_counts(:)
    integer, allocatable :: deBlockList(:,:,:)
    type (ESMF_DistGrid) :: distgridCells, distgridVertices, distgridEdges

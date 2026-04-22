@@ -277,6 +277,7 @@ endif()
 ###############################################################################
 if (MPASMODEL)
   add_definitions(-DMPASMODEL)
+  add_definitions(-DMPAS_USE_MPI_F08)
   set(DYCORE_TARGET ${DYCORE_TARGET_MPASMODEL})
 
   # MPAS model

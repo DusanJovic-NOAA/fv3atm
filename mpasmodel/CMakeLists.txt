@@ -1,4 +1,26 @@
 # Set UFS specific MPAS Model build options
+
+# Define the compiler flags here to be the same as in the standalone MPAS-Model
+# (see: MPAS-Model/cmake/Functions/MPAS_Functions.cmake)
+if (CMAKE_Fortran_COMPILER_ID MATCHES GNU)
+  set(CMAKE_Fortran_FLAGS "-ffree-line-length-none -fconvert=big-endian")
+  set(CMAKE_Fortran_FLAGS_DEBUG "-g")
+  set(CMAKE_Fortran_FLAGS_RELEASE "-O3")
+  set(CMAKE_C_FLAGS "")
+  set(CMAKE_C_FLAGS_DEBUG "-g")
+  set(CMAKE_C_FLAGS_RELEASE "-O3")
+  if (CMAKE_Fortran_COMPILER_VERSION VERSION_GREATER_EQUAL 10)
+    set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -fallow-argument-mismatch -fallow-invalid-boz")
+  endif()
+elseif (CMAKE_Fortran_COMPILER_ID MATCHES Intel)
+  set(CMAKE_Fortran_FLAGS "-align array64byte -convert big_endian -Qoption,fpp,-macro_expand=vc")
+  set(CMAKE_Fortran_FLAGS_DEBUG "-g")
+  set(CMAKE_Fortran_FLAGS_RELEASE "-O3")
+  set(CMAKE_C_FLAGS "")
+  set(CMAKE_C_FLAGS_DEBUG "-g")
+  set(CMAKE_C_FLAGS_RELEASE "-O3")
+endif()
+
 set(FETCH_MPAS_DATA OFF CACHE BOOL "Fetch mpas_data" FORCE)
 set(MPAS_CHECKOUT_EXTERNALS OFF CACHE BOOL "Use checkout_externals tool to clone dependencies" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
@@ -8,8 +30,6 @@ else()
   set(MPAS_DOUBLE_PRECISION ON  CACHE BOOL "Use double precision 64-bit Floating point." FORCE)
 endif()
 set(MPAS_USE_PIO ON CACHE BOOL "Build with PIO I/O library" FORCE)
-
-add_definitions(-DMPAS_USE_MPI_F08)
 
 add_subdirectory(MPAS-Model)
 

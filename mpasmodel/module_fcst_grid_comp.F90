@@ -13,13 +13,14 @@
 !>
 ! ###########################################################################################
 module module_fcst_grid_comp
+
   use mpi_f08
   use esmf
   use nuopc
 
   use mpas_subdriver
 
-  use module_mpasmodel_config, only : fcst_mpi_comm, dt_atmos, output_fh, quilting_restart, calendar
+  use module_mpasmodel_config, only : fcst_mpi_comm, dt_atmos, output_fh, quilting, quilting_restart, calendar
 
   use module_mpasmodel_config, only : corelist, domain
   use module_mpasmodel_config, only : nCellsSolve, nEdgesSolve, nVerticesSolve, nVertLevels
@@ -195,7 +196,11 @@ contains
     ! Initialize component models.
     ! mpas_init() calls the MPAS initialization.
     ! #######################################################################################
+#ifdef MPAS_USE_MPI_F08
     call mpas_init(corelist, domain, external_comm=fcst_mpi_comm)
+#else
+    call mpas_init(corelist, domain, external_comm=fcst_mpi_comm%mpi_val)
+#endif
 
     call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', mesh)
     call mpas_pool_get_dimension(mesh, 'nCellsSolve',    nCellsSolve)
@@ -207,60 +212,61 @@ contains
     call mpas_dmpar_sum_int(domain % dminfo, nCellsSolve, nCellsGlobal)
     call mpas_dmpar_sum_int(domain % dminfo, nEdgesSolve, nEdgesGlobal)
 
-    ! History bundles
+    if (quilting) then
+      ! History bundles
+      call parse_history_list_vars(rc=rc); ESMF_ERR(rc)
 
-    call parse_history_list_vars(rc=rc); ESMF_ERR(rc)
+      if (num_history_bilinear_vars > 0) then
+        call ufs_mpas_create_history_bundle(history_bilinear_field_bundle, history_bilinear_vars(1:num_history_bilinear_vars), 'bilinear', rc=rc); ESMF_ERR(rc)
+        call ESMF_StateAdd(exportState, (/ history_bilinear_field_bundle /), rc=rc); ESMF_ERR(rc)
+      end if
 
-    if (num_history_bilinear_vars > 0) then
-      call ufs_mpas_create_history_bundle(history_bilinear_field_bundle, history_bilinear_vars(1:num_history_bilinear_vars), 'bilinear', rc=rc); ESMF_ERR(rc)
-      call ESMF_StateAdd(exportState, (/ history_bilinear_field_bundle /), rc=rc); ESMF_ERR(rc)
-    end if
+      if (num_history_nearest_dtos_vars > 0) then
+        call ufs_mpas_create_history_bundle(history_nearest_dtos_field_bundle, history_nearest_dtos_vars(1:num_history_nearest_dtos_vars), 'nearest_dtos', rc=rc); ESMF_ERR(rc)
+        call ESMF_StateAdd(exportState, (/ history_nearest_dtos_field_bundle /), rc=rc); ESMF_ERR(rc)
+      end if
 
-    if (num_history_nearest_dtos_vars > 0) then
-      call ufs_mpas_create_history_bundle(history_nearest_dtos_field_bundle, history_nearest_dtos_vars(1:num_history_nearest_dtos_vars), 'nearest_dtos', rc=rc); ESMF_ERR(rc)
-      call ESMF_StateAdd(exportState, (/ history_nearest_dtos_field_bundle /), rc=rc); ESMF_ERR(rc)
-    end if
+      if (num_history_nearest_stod_vars > 0) then
+        call ufs_mpas_create_history_bundle(history_nearest_stod_field_bundle, history_nearest_stod_vars(1:num_history_nearest_stod_vars), 'nearest_stod', rc=rc); ESMF_ERR(rc)
+        call ESMF_StateAdd(exportState, (/ history_nearest_stod_field_bundle /), rc=rc); ESMF_ERR(rc)
+      end if
 
-    if (num_history_nearest_stod_vars > 0) then
-      call ufs_mpas_create_history_bundle(history_nearest_stod_field_bundle, history_nearest_stod_vars(1:num_history_nearest_stod_vars), 'nearest_stod', rc=rc); ESMF_ERR(rc)
-      call ESMF_StateAdd(exportState, (/ history_nearest_stod_field_bundle /), rc=rc); ESMF_ERR(rc)
-    end if
+      if (num_history_patch_vars > 0) then
+        call ufs_mpas_create_history_bundle(history_patch_field_bundle, history_patch_vars(1:num_history_patch_vars), 'patch', rc=rc); ESMF_ERR(rc)
+        call ESMF_StateAdd(exportState, (/ history_patch_field_bundle /), rc=rc); ESMF_ERR(rc)
+      end if
 
-    if (num_history_patch_vars > 0) then
-      call ufs_mpas_create_history_bundle(history_patch_field_bundle, history_patch_vars(1:num_history_patch_vars), 'patch', rc=rc); ESMF_ERR(rc)
-      call ESMF_StateAdd(exportState, (/ history_patch_field_bundle /), rc=rc); ESMF_ERR(rc)
-    end if
+      if (num_history_conserve_vars > 0) then
+        call ufs_mpas_create_history_bundle(history_conserve_field_bundle, history_conserve_vars(1:num_history_conserve_vars), 'conserve', rc=rc); ESMF_ERR(rc)
+        call ESMF_StateAdd(exportState, (/ history_conserve_field_bundle /), rc=rc); ESMF_ERR(rc)
+      end if
 
-    if (num_history_conserve_vars > 0) then
-      call ufs_mpas_create_history_bundle(history_conserve_field_bundle, history_conserve_vars(1:num_history_conserve_vars), 'conserve', rc=rc); ESMF_ERR(rc)
-      call ESMF_StateAdd(exportState, (/ history_conserve_field_bundle /), rc=rc); ESMF_ERR(rc)
-    end if
-
-    ! Test history type bundle on mesh, using restart array bundle
-    call ufs_mpas_create_restart_array_bundle(history_array_bundle, bundle_name='history_native', stream_name='output', rc=rc); ESMF_ERR(rc)
-    call ESMF_InfoGetFromHost(history_array_bundle, info=info, rc=rc); ESMF_ERR(rc)
-    call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
-    call ESMF_StateAdd(exportState, (/ history_array_bundle /), rc=rc); ESMF_ERR(rc)
-
-    ! call ufs_mpas_create_restart_array_bundle(diag_bundle, bundle_name='diag_native', stream_name='diagnostics', rc=rc); ESMF_ERR(rc)
-    ! call ESMF_InfoGetFromHost(diag_bundle, info=info, rc=rc); ESMF_ERR(rc)
-    ! call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
-    ! call ESMF_StateAdd(exportState, (/ diag_bundle /), rc=rc); ESMF_ERR(rc)
-
-    ! Restart bundle
-    if (quilting_restart) then
-      ! use FieldBundle
-      ! call ufs_mpas_create_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
-      ! call ESMF_InfoGetFromHost(restart_field_bundle, info=info, rc=rc); ESMF_ERR(rc)
-      ! call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
-      ! call ESMF_StateAdd(exportState, (/ restart_field_bundle /), rc=rc); ESMF_ERR(rc)
-
-      ! use ArrayBundle
-      call ufs_mpas_create_restart_array_bundle(restart_array_bundle, bundle_name='restart_mpas_array', stream_name='restart', rc=rc); ESMF_ERR(rc)
-      call ESMF_InfoGetFromHost(restart_array_bundle, info=info, rc=rc); ESMF_ERR(rc)
+      ! Test history type bundle on mesh, using restart array bundle
+      call ufs_mpas_create_restart_array_bundle(history_array_bundle, bundle_name='history_native', stream_name='output', rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoGetFromHost(history_array_bundle, info=info, rc=rc); ESMF_ERR(rc)
       call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
-      call ESMF_StateAdd(exportState, (/ restart_array_bundle /), rc=rc); ESMF_ERR(rc)
-    end if
+      call ESMF_StateAdd(exportState, (/ history_array_bundle /), rc=rc); ESMF_ERR(rc)
+
+      ! call ufs_mpas_create_restart_array_bundle(diag_bundle, bundle_name='diag_native', stream_name='diagnostics', rc=rc); ESMF_ERR(rc)
+      ! call ESMF_InfoGetFromHost(diag_bundle, info=info, rc=rc); ESMF_ERR(rc)
+      ! call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
+      ! call ESMF_StateAdd(exportState, (/ diag_bundle /), rc=rc); ESMF_ERR(rc)
+
+      ! Restart bundle
+      if (quilting_restart) then
+        ! use FieldBundle
+        ! call ufs_mpas_create_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
+        ! call ESMF_InfoGetFromHost(restart_field_bundle, info=info, rc=rc); ESMF_ERR(rc)
+        ! call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
+        ! call ESMF_StateAdd(exportState, (/ restart_field_bundle /), rc=rc); ESMF_ERR(rc)
+
+        ! use ArrayBundle
+        call ufs_mpas_create_restart_array_bundle(restart_array_bundle, bundle_name='restart_mpas_array', stream_name='restart', rc=rc); ESMF_ERR(rc)
+        call ESMF_InfoGetFromHost(restart_array_bundle, info=info, rc=rc); ESMF_ERR(rc)
+        call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
+        call ESMF_StateAdd(exportState, (/ restart_array_bundle /), rc=rc); ESMF_ERR(rc)
+      end if ! quilting_restart
+    end if ! quilting
 
     ngrids = 1
     allocate(is_moving(ngrids))
@@ -430,6 +436,7 @@ contains
   ! Run phase(1) for the ESMF forecast grid component.
   ! ###########################################################################################
   subroutine fcst_run_phase_1(fcst_comp, importState, exportState, clock, rc)
+
     type(ESMF_GridComp) :: fcst_comp
     type(ESMF_State)    :: importState, exportState
     type(ESMF_Clock)    :: clock
@@ -438,7 +445,7 @@ contains
     ! Locals
     integer             :: ierr
     integer             :: fcst_seconds, fcst_days
-    real(kind=8)        :: mpi_wtime, tbeg1
+    real(kind=8)        :: tbeg1
     character(19)       :: xtime        ! "YYYY-MM-DD_hh:mm:ss"
 
     type (ESMF_Time) :: ufsCurrTime
@@ -479,40 +486,42 @@ contains
 
     call ESMF_TimeIntervalGet(mpasCurrTime % t - StartTime, s=seconds, rc=rc)
 
-    if (ANY(nint(output_fh(:)*3600.0) == seconds)) then
-       if (num_history_bilinear_vars > 0) then
-          call ufs_mpas_update_history_bundle(history_bilinear_field_bundle, history_bilinear_vars(1:num_history_bilinear_vars), rc=rc); ESMF_ERR(rc)
-       end if
-       if (num_history_nearest_dtos_vars > 0) then
+    if (quilting) then
+      if (ANY(nint(output_fh(:)*3600.0) == seconds)) then
+        if (num_history_bilinear_vars > 0) then
+         call ufs_mpas_update_history_bundle(history_bilinear_field_bundle, history_bilinear_vars(1:num_history_bilinear_vars), rc=rc); ESMF_ERR(rc)
+        end if
+        if (num_history_nearest_dtos_vars > 0) then
           call ufs_mpas_update_history_bundle(history_nearest_dtos_field_bundle, history_nearest_dtos_vars(1:num_history_nearest_dtos_vars), rc=rc); ESMF_ERR(rc)
-       end if
-       if (num_history_nearest_stod_vars > 0) then
+        end if
+        if (num_history_nearest_stod_vars > 0) then
           call ufs_mpas_update_history_bundle(history_nearest_stod_field_bundle, history_nearest_stod_vars(1:num_history_nearest_stod_vars), rc=rc); ESMF_ERR(rc)
-       end if
-       if (num_history_patch_vars > 0) then
+        end if
+        if (num_history_patch_vars > 0) then
           call ufs_mpas_update_history_bundle(history_patch_field_bundle, history_patch_vars(1:num_history_patch_vars), rc=rc); ESMF_ERR(rc)
-       end if
-       if (num_history_conserve_vars > 0) then
+        end if
+        if (num_history_conserve_vars > 0) then
           call ufs_mpas_update_history_bundle(history_conserve_field_bundle, history_conserve_vars(1:num_history_conserve_vars), rc=rc); ESMF_ERR(rc)
-       end if
+        end if
 
-       ! Test history type bundle on mesh, using restart array bundle
-       call ufs_mpas_update_restart_array_bundle(history_array_bundle, stream_name='output', rc=rc); ESMF_ERR(rc)
-       ! call ufs_mpas_update_restart_array_bundle(diag_bundle, stream_name='diagnostics', rc=rc); ESMF_ERR(rc)
-    end if
+        ! Test history type bundle on mesh, using restart array bundle
+        call ufs_mpas_update_restart_array_bundle(history_array_bundle, stream_name='output', rc=rc); ESMF_ERR(rc)
+        ! call ufs_mpas_update_restart_array_bundle(diag_bundle, stream_name='diagnostics', rc=rc); ESMF_ERR(rc)
+      end if
 
-    ! Update restart bundle
-    if (quilting_restart) then
+      ! Update restart bundle
+      if (quilting_restart) then
         if (ANY(frestart(:) == seconds)) then
-            ! call ufs_mpas_update_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
+          ! call ufs_mpas_update_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
 
-            call ufs_mpas_update_restart_array_bundle(restart_array_bundle, stream_name='restart', rc=rc); ESMF_ERR(rc)
+          call ufs_mpas_update_restart_array_bundle(restart_array_bundle, stream_name='restart', rc=rc); ESMF_ERR(rc)
 
         end if
-    end if
+      end if ! quilting
+    end if ! quilting_restart
 
     ! Timing info (debug mode)
-    if (mype == 0) write(*,'(A,I8,A,F8.3,A,F8.4)') &
+    if (mype == 0) write(*,'(A,I8,A,F8.3,A,F8.3)') &
                                        'atm phase1: atmsteps: ',  n_atmsteps, &
                                        ' fcst time: ',(seconds/3600.), &
                                        ' elapsed time per step: ',  mpi_wtime()-tbeg1
@@ -528,7 +537,7 @@ contains
     integer,intent(out) :: rc
 
     ! Locals
-    real(kind=8)        :: mpi_wtime, tbeg1
+    real(kind=8)        :: tbeg1
 
     ! Initialize ESMF error message.
     rc = ESMF_SUCCESS
@@ -539,7 +548,7 @@ contains
     call setup_exportdata(rc=rc); ESMF_ERR(rc)
 
     ! Timing info (debug mode)
-    if (mype == 0) write(*,'(A,I8,A,F8.3,A,F8.4)') &
+    if (mype == 0) write(*,'(A,I8,A,F8.3,A,F8.3)') &
                                        'atm phase2: atmsteps: ',  n_atmsteps, &
                                        ' fcst time: ',(seconds/3600.), &
                                        ' elapsed time per step: ',  mpi_wtime()-tbeg1
@@ -555,7 +564,7 @@ contains
     integer,intent(out) :: rc
 
     ! Locals
-    real(kind=8)        :: mpi_wtime, tbeg1
+    real(kind=8)        :: tbeg1
 
     ! Initialize ESMF error message.
     rc = ESMF_SUCCESS
