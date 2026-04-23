@@ -14,7 +14,6 @@ module ufs_mpas_wgc_output
   use mpi
 #endif
   use esmf
-  use pio, only : PIO_int, PIO_real, PIO_double, PIO_char
 
   use mpas_derived_types, only : domain_type
   use mpas_kind_types,    only : StrKIND, RKIND, R4KIND, R8KIND
@@ -38,6 +37,10 @@ module ufs_mpas_wgc_output
 
   public :: ufs_mpas_create_restart_array_bundle
   public :: ufs_mpas_update_restart_array_bundle
+
+  ! FIXME: Temporary fix to get bit-identical outputs from both PIO and SMIOL
+  ! Use this value instead the one defined in mpas_io.F to be consistent between PIO and SMIOL
+  integer, parameter :: MPAS_INT_FILLVAL_NEG_HUGE = -huge(0)
 
 contains
 
@@ -177,7 +180,7 @@ contains
             ptr_i4_d1 = field_1d_integer%array(1:nCellsSolve)
 
             call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
-            call ESMF_InfoSet(field_info, key="/NetCDF/FV3/missing_value", value=field_1d_integer % missingValue, rc=rc); ESMF_ERR(rc)
+            call ESMF_InfoSet(field_info, key="/NetCDF/FV3/missing_value", value=MPAS_INT_FILLVAL_NEG_HUGE, rc=rc); ESMF_ERR(rc)
             nullify(field_1d_integer)
          case (2)
             call mpas_pool_get_field(allFields, trim(field_name), field_2d_integer, timelevel=1)
@@ -191,7 +194,7 @@ contains
             ptr_i4_d2 = field_2d_integer%array(:,1:nCellsSolve)
 
             call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
-            call ESMF_InfoSet(field_info, key="/NetCDF/FV3/missing_value", value=field_2d_integer % missingValue, rc=rc); ESMF_ERR(rc)
+            call ESMF_InfoSet(field_info, key="/NetCDF/FV3/missing_value", value=MPAS_INT_FILLVAL_NEG_HUGE, rc=rc); ESMF_ERR(rc)
             nullify(field_2d_integer)
          case default
             call mpas_log_write(subname//' Unsupported field rank $i', MPAS_LOG_CRIT, intArgs=(/ mpas_pool_field_info % ndims /))
@@ -754,9 +757,9 @@ contains
 
                        call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), value=real0d % scalar, rc=rc); ESMF_ERR(rc)
                        if (RKIND == R4KIND) then
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_real, rc=rc); ESMF_ERR(rc)
+                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value='real', rc=rc); ESMF_ERR(rc)
                        else if (RKIND == R8KIND) then
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_double, rc=rc); ESMF_ERR(rc)
+                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value='double', rc=rc); ESMF_ERR(rc)
                        end if
                        call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
 
@@ -791,9 +794,9 @@ contains
                        else ! Field has no distributed dimension
                            call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), values=real1d % array, rc=rc); ESMF_ERR(rc)
                            if (RKIND == R4KIND) then
-                               call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_real, rc=rc); ESMF_ERR(rc)
+                               call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value='real', rc=rc); ESMF_ERR(rc)
                            else if (RKIND == R8KIND) then
-                               call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_double, rc=rc); ESMF_ERR(rc)
+                               call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value='double', rc=rc); ESMF_ERR(rc)
                            end if
                            call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
                        end if
@@ -981,7 +984,7 @@ contains
                        block => int0d % block
 
                        call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), value=int0d % scalar, rc=rc); ESMF_ERR(rc)
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_int, rc=rc); ESMF_ERR(rc)
+                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value='int', rc=rc); ESMF_ERR(rc)
                        call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
                    case (1)
                        call mpas_pool_get_field(allFields, itr % memberName, int1d, timeLevel)
@@ -1065,7 +1068,7 @@ contains
                        block => char0d % block
 
                        call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName), value=trim(char0d % scalar), rc=rc); ESMF_ERR(rc)
-                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value=PIO_char, rc=rc); ESMF_ERR(rc)
+                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_type', value='char', rc=rc); ESMF_ERR(rc)
                        call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(itr % memberName)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
 
                    case (1)
@@ -2100,9 +2103,9 @@ contains
 
                   call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name), value=real0d % scalar, rc=rc); ESMF_ERR(rc)
                   if (RKIND == R4KIND) then
-                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_real, rc=rc); ESMF_ERR(rc)
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value='real', rc=rc); ESMF_ERR(rc)
                   else if (RKIND == R8KIND) then
-                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_double, rc=rc); ESMF_ERR(rc)
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value='double', rc=rc); ESMF_ERR(rc)
                   end if
                   call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
 
@@ -2134,9 +2137,9 @@ contains
                   else ! Array has no distributed dimension
                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name), values=real1d % array, rc=rc); ESMF_ERR(rc)
                       if (RKIND == R4KIND) then
-                          call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_real, rc=rc); ESMF_ERR(rc)
+                          call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value='real', rc=rc); ESMF_ERR(rc)
                       else if (RKIND == R8KIND) then
-                          call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_double, rc=rc); ESMF_ERR(rc)
+                          call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value='double', rc=rc); ESMF_ERR(rc)
                       end if
                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
                   end if
@@ -2311,7 +2314,7 @@ contains
                   block => int0d % block
 
                   call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name), value=int0d % scalar, rc=rc); ESMF_ERR(rc)
-                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_int, rc=rc); ESMF_ERR(rc)
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value='int', rc=rc); ESMF_ERR(rc)
                   call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
               case (1)
                   call mpas_pool_get_field(allFields, var_name, int1d, timeLevel)
@@ -2343,7 +2346,7 @@ contains
 
                   else ! Array has no distributed dimension
                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name), values=int1d % array, rc=rc); ESMF_ERR(rc)
-                      call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_int, rc=rc); ESMF_ERR(rc)
+                      call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value='int', rc=rc); ESMF_ERR(rc)
                       call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
                   end if
 
@@ -2395,7 +2398,7 @@ contains
                   block => char0d % block
 
                   call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name), value=trim(char0d % scalar), rc=rc); ESMF_ERR(rc)
-                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value=PIO_char, rc=rc); ESMF_ERR(rc)
+                  call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_type', value='char', rc=rc); ESMF_ERR(rc)
                   call ESMF_InfoSet(bundle_info, key='/MPAS/'//trim(var_name)//'_rank', value=info % nDims, rc=rc); ESMF_ERR(rc)
 
               case (1)

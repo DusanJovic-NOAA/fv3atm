@@ -335,7 +335,11 @@ if (MPAS)
 endif()
 
 if (MPASMODEL)
-  target_link_libraries(${DYCORE_TARGET} PUBLIC mpas)
+  target_link_libraries(${DYCORE_TARGET} PUBLIC mpas PIO::PIO_Fortran)
+  if (NOT MPAS_USE_PIO)
+     target_compile_definitions(${DYCORE_TARGET} PRIVATE MPAS_SMIOL_SUPPORT)
+     target_link_libraries(${DYCORE_TARGET} PUBLIC MPAS::external::smiolf)
+  endif()
 endif()
 
 # Always include EMC libraries in dycore install
