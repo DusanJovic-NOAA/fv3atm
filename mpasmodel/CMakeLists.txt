@@ -30,7 +30,11 @@ else()
   set(MPAS_DOUBLE_PRECISION ON  CACHE BOOL "Use double precision 64-bit Floating point." FORCE)
 endif()
 
-add_subdirectory(MPAS-Model)
+if(MPAS_USE_GSL_FORK)
+  add_subdirectory(MPAS-Model-gsl)
+else()
+  add_subdirectory(MPAS-Model)
+endif()
 
 target_sources(core_atmosphere PRIVATE MPAS-Model/src/external/esmf_time_f90/wrf_error_fatal.F90)
 

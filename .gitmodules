@@ -22,3 +22,7 @@
   path = mpasmodel/MPAS-Model
   url = https://github.com/DusanJovic-NOAA/MPAS-Model
   branch = ufs_with_mpasmodel
+[submodule "mpasmodel/MPAS-Model-gsl"]
+  path = mpasmodel/MPAS-Model-gsl
+  url = https://github.com/DusanJovic-NOAA/MPAS-Model
+  branch = ufs_with_mpasmodel_gsl_dev
