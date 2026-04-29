@@ -32,7 +32,7 @@ module module_cplfields
   !  l : model levels (3D)
   !  s : surface (2D)
   !  t : tracers (4D)
-  integer,          public, parameter :: NexportFields = 121 !< Total number of export fields
+  integer,          public, parameter :: NexportFields = 98 !< Total number of export fields
   type(ESMF_Field), target, public    :: exportFields(NexportFields) !< ESMF array for export fields
 
   !> ESMF array for export fields
@@ -134,41 +134,13 @@ module module_cplfields
     FieldInfo("surface_friction_velocity                ", "s"), &
     ! FieldInfo("fraction_of_vegetation_category          ", "s"), &
     ! FieldInfo("number_of_vegetation_categories          ", "s"), &
-
-
-    !  For JEDI
-    ! dynamics
-    FieldInfo("u                                        ", "l"), &
-    FieldInfo("v                                        ", "l"), &
-    FieldInfo("ua                                       ", "l"), &
-    FieldInfo("va                                       ", "l"), &
-    FieldInfo("t                                        ", "l"), &
-    FieldInfo("delp                                     ", "l"), &
-    FieldInfo("sphum                                    ", "l"), &
-    FieldInfo("ice_wat                                  ", "l"), &
-    FieldInfo("liq_wat                                  ", "l"), &
-    FieldInfo("o3mr                                     ", "l"), &
-    FieldInfo("phis                                     ", "s"), &
-    FieldInfo("u_srf                                    ", "s"), &
-    FieldInfo("v_srf                                    ", "s"), &
-    ! physics
-    FieldInfo("slmsk                                    ", "s"), &
-    FieldInfo("weasd                                    ", "s"), &
-    FieldInfo("tsea                                     ", "s"), &
-    FieldInfo("vtype                                    ", "s"), &
-    FieldInfo("stype                                    ", "s"), &
     FieldInfo("vfrac                                    ", "s"), &
-    FieldInfo("stc                                      ", "g"), &
-    FieldInfo("smc                                      ", "g"), &
-    FieldInfo("snwdph                                   ", "s"), &
-    FieldInfo("f10m                                     ", "s"), &
     FieldInfo("zorl                                     ", "s"), &
-    FieldInfo("t2m                                      ", "s"), &
     FieldInfo("cpl_scalars                              ", "s")]
 
 ! Import Fields ----------------------------------------
   !> Number of import fields (IVAI: add 3 inst_tracer_diag)
-  integer,          public, parameter :: NimportFields = 67 + 3 + 5
+  integer,          public, parameter :: NimportFields = 42 + 3 + 5
   !> Logicals to inidicate if field is valid
   logical,          public            :: importFieldsValid(NimportFields)
   !> ESMF array for import fields
@@ -229,35 +201,6 @@ module module_cplfields
     FieldInfo("inst_drag_wind_speed_for_momentum        ", "s"), &
     FieldInfo("inst_drag_mass_flux_for_heat_and_moisture", "s"), &
     FieldInfo("inst_func_of_roughness_length_and_vfrac  ", "s"), &
-
-    !  For JEDI
-    ! dynamics
-    FieldInfo("u                                        ", "l"), &
-    FieldInfo("v                                        ", "l"), &
-    FieldInfo("ua                                       ", "l"), &
-    FieldInfo("va                                       ", "l"), &
-    FieldInfo("t                                        ", "l"), &
-    FieldInfo("delp                                     ", "l"), &
-    FieldInfo("sphum                                    ", "l"), &
-    FieldInfo("ice_wat                                  ", "l"), &
-    FieldInfo("liq_wat                                  ", "l"), &
-    FieldInfo("o3mr                                     ", "l"), &
-    FieldInfo("phis                                     ", "s"), &
-    FieldInfo("u_srf                                    ", "s"), &
-    FieldInfo("v_srf                                    ", "s"), &
-    ! physics
-    FieldInfo("slmsk                                    ", "s"), &
-    FieldInfo("weasd                                    ", "s"), &
-    FieldInfo("tsea                                     ", "s"), &
-    FieldInfo("vtype                                    ", "s"), &
-    FieldInfo("stype                                    ", "s"), &
-    FieldInfo("vfrac                                    ", "s"), &
-    FieldInfo("stc                                      ", "g"), &
-    FieldInfo("smc                                      ", "g"), &
-    FieldInfo("snwdph                                   ", "s"), &
-    FieldInfo("f10m                                     ", "s"), &
-    FieldInfo("zorl                                     ", "s"), &
-    FieldInfo("t2m                                      ", "s"), &
 
     ! For FIRE
     FieldInfo("hflx_fire                                ", "s"), &
