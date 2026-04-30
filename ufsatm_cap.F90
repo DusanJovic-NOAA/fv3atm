@@ -38,7 +38,8 @@ module ufsatm_cap_mod
 #ifdef MPAS
   use module_mpas_config,     only: output_fh, dt_atmos, calendar,           &
                                     fcst_mpi_comm, pio_ioformat, pio_iotype, &
-                                    pio_subsystem, pio_stride,               &
+                                    pio_subsystem_ic, pio_stride, pio_subsystem_lbc, &
+                                    pio_subsystem_output, &
                                     pio_numiotasks, pio_iodesc, cpl_grid_id, &
                                     cplprint_flag, first_kdt, quilting,      &
                                     quilting_restart
@@ -173,7 +174,7 @@ module ufsatm_cap_mod
     call NUOPC_CompSpecialize(gcomp, specLabel=label_Advance, &
                               specPhaseLabel="phase1", specRoutine=ModelAdvance_phase1, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-#ifdef FV3
+
     ! setup Run/Advance phase: phase2
     call NUOPC_CompSetEntryPoint(gcomp, ESMF_METHOD_RUN, &
                                  phaseLabelList=(/"phase2"/), userRoutine=routine_Run, rc=rc)
@@ -182,7 +183,6 @@ module ufsatm_cap_mod
     call NUOPC_CompSpecialize(gcomp, specLabel=label_Advance, &
                               specPhaseLabel="phase2", specRoutine=ModelAdvance_phase2, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-#endif
 
     ! specializations to set ufsatm cap run clock (model clock)
     call ESMF_MethodRemove(gcomp, label=label_SetRunClock, rc=rc)
@@ -191,7 +191,6 @@ module ufsatm_cap_mod
     call NUOPC_CompSpecialize(gcomp, specLabel=label_SetRunClock, &
                                      specRoutine=ModelSetRunClock, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-
 #ifdef FV3
     ! specializations required to support 'inline' run sequences
     call NUOPC_CompSpecialize(gcomp, specLabel=label_CheckImport, &
@@ -399,8 +398,8 @@ module ufsatm_cap_mod
           return
        end if
     else
-       cvalue = 'NETCDF'
-       pio_iotype = PIO_IOTYPE_NETCDF
+       cvalue = 'PNETCDF'
+       pio_iotype = PIO_IOTYPE_PNETCDF
     end if
 
     ! pio_root
@@ -482,8 +481,14 @@ module ufsatm_cap_mod
     end if
 
     ! Initialize PIO
-    allocate(pio_subsystem)
-    call pio_init(mype, fcst_mpi_comm%mpi_val, pio_numiotasks, 0, pio_stride, pio_rearranger, pio_subsystem, base=pio_root)
+    allocate(pio_subsystem_ic)
+    call pio_init(mype, fcst_mpi_comm%mpi_val, pio_numiotasks, 0, pio_stride, pio_rearranger, pio_subsystem_ic, base=pio_root)
+    allocate(pio_subsystem_lbc)
+    call pio_init(mype, fcst_mpi_comm%mpi_val, pio_numiotasks, 0, pio_stride, pio_rearranger, pio_subsystem_lbc, base=pio_root)
+
+    allocate(pio_subsystem_output)
+    call pio_init(mype, fcst_mpi_comm%mpi_val, pio_numiotasks, 0, pio_stride, &
+         pio_rearranger, pio_subsystem_output, base=pio_root)
 
     ! PIO debug related options
     ! pio_debug_level
@@ -630,7 +635,7 @@ module ufsatm_cap_mod
       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
     endif ! quilting
-!
+    !
     call ESMF_ConfigGetAttribute(config=CF, value=dt_atmos, label ='dt_atmos:',   rc=rc)
     call ESMF_ConfigGetAttribute(config=CF, value=nfhmax,   label ='nhours_fcst:',rc=rc)
     if(mype == 0) print *,'af ufs config,dt_atmos=',dt_atmos,'nfhmax=',nfhmax
@@ -1411,7 +1416,6 @@ module ufsatm_cap_mod
     endif
 !
 !-- set up output forecast time if output_fh is specified
-!#ifdef FV3
     if (noutput_fh > 0 ) then
 !--- use output_fh to sepcify output forecast time
       loutput_fh = .true.
@@ -1443,7 +1447,7 @@ module ufsatm_cap_mod
       endif ! end loutput_fh
     endif
     if(mype==0) print *,'output_fh=',output_fh(1:size(output_fh)),'lflname_fulltime=',lflname_fulltime
-!#endif
+
     if ( quilting ) then
       do i=1, write_groups
         call ESMF_InfoGetFromHost(wrtState(i), info=info, rc=rc)
@@ -1611,10 +1615,10 @@ module ufsatm_cap_mod
 
     call ModelAdvance_phase1(gcomp, rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-!#ifdef FV3
+
     call ModelAdvance_phase2(gcomp, rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-!#endif
+
     if (profile_memory) call ESMF_VMLogMemInfo("Leaving UFSATM ModelAdvance: ")
 
     timere = MPI_Wtime()
