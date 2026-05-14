@@ -55,6 +55,9 @@ module module_mpasmodel_config
   !! hours
   real,dimension(:),allocatable :: output_fh
 
+  !> Restart times in forecast seconds, computed from restart_fh
+  integer, allocatable           :: frestart(:)
+
   !> Calendar type
   character(17)            :: calendar='                 '
 

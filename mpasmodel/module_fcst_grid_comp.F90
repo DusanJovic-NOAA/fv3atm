@@ -21,19 +21,16 @@ module module_fcst_grid_comp
   use mpas_subdriver
 
   use module_mpasmodel_config, only : fcst_mpi_comm, dt_atmos, output_fh, quilting, quilting_restart, calendar
+  use module_mpasmodel_config, only : frestart
 
   use module_mpasmodel_config, only : corelist, domain
   use module_mpasmodel_config, only : nCellsSolve, nEdgesSolve, nVerticesSolve, nVertLevels
   use module_mpasmodel_config, only : nCellsGlobal, nEdgesGlobal, nVerticesGlobal
 
-  use ufs_mpas_wgc_output,     only : ufs_mpas_create_history_bundle, ufs_mpas_update_history_bundle
-  use ufs_mpas_wgc_output,     only : ufs_mpas_create_restart_bundle, ufs_mpas_update_restart_bundle
-  use ufs_mpas_wgc_output,     only : ufs_mpas_create_restart_array_bundle, ufs_mpas_update_restart_array_bundle
+  use ufs_mpas_wgc_output
 
   use module_cplfields,        only: nExportFields, exportFields, exportFieldsInfo, &
                                      nImportFields, importFields, importFieldsInfo
-
-  use module_write_mpas_restart_array_bundle_pio, only : write_mpas_restart_array_bundle_pio
 
   implicit none
   private
@@ -41,32 +38,9 @@ module module_fcst_grid_comp
   ! module variables
   integer                        :: n_atmsteps
   integer                        :: seconds
-  integer, allocatable           :: frestart(:)
   type(ESMF_Time)                :: StartTime
 
   integer :: mype = 0
-
-  type(ESMF_FieldBundle) :: history_bilinear_field_bundle
-  type(ESMF_FieldBundle) :: history_nearest_dtos_field_bundle
-  type(ESMF_FieldBundle) :: history_nearest_stod_field_bundle
-  type(ESMF_FieldBundle) :: history_patch_field_bundle
-  type(ESMF_FieldBundle) :: history_conserve_field_bundle
-  integer, parameter :: max_num_history_vars = 1000
-  character(len=64) :: history_bilinear_vars(max_num_history_vars)
-  character(len=64) :: history_nearest_dtos_vars(max_num_history_vars)
-  character(len=64) :: history_nearest_stod_vars(max_num_history_vars)
-  character(len=64) :: history_patch_vars(max_num_history_vars)
-  character(len=64) :: history_conserve_vars(max_num_history_vars)
-  integer :: num_history_bilinear_vars = 0
-  integer :: num_history_nearest_dtos_vars = 0
-  integer :: num_history_nearest_stod_vars = 0
-  integer :: num_history_patch_vars = 0
-  integer :: num_history_conserve_vars = 0
-
-  type(ESMF_FieldBundle) :: restart_field_bundle
-  type(ESMF_ArrayBundle) :: restart_array_bundle
-  type(ESMF_ArrayBundle) :: history_array_bundle
-  type(ESMF_ArrayBundle) :: diag_bundle
 
   public SetServices
 
@@ -134,7 +108,7 @@ contains
 
     type (mpas_pool_type), pointer :: mesh
     type(ESMF_Info) :: info
-    integer :: ngrids=1
+    integer :: ngrids
     logical, allocatable :: is_moving(:)
     integer                       :: num_restart_fh
     real,dimension(:),allocatable :: restart_fh
@@ -212,63 +186,12 @@ contains
     call mpas_dmpar_sum_int(domain % dminfo, nCellsSolve, nCellsGlobal)
     call mpas_dmpar_sum_int(domain % dminfo, nEdgesSolve, nEdgesGlobal)
 
+    ngrids = 0
     if (quilting) then
-      ! History bundles
-      call parse_history_list_vars(rc=rc); ESMF_ERR(rc)
-
-      if (num_history_bilinear_vars > 0) then
-        call ufs_mpas_create_history_bundle(history_bilinear_field_bundle, history_bilinear_vars(1:num_history_bilinear_vars), 'bilinear', rc=rc); ESMF_ERR(rc)
-        call ESMF_StateAdd(exportState, (/ history_bilinear_field_bundle /), rc=rc); ESMF_ERR(rc)
-      end if
-
-      if (num_history_nearest_dtos_vars > 0) then
-        call ufs_mpas_create_history_bundle(history_nearest_dtos_field_bundle, history_nearest_dtos_vars(1:num_history_nearest_dtos_vars), 'nearest_dtos', rc=rc); ESMF_ERR(rc)
-        call ESMF_StateAdd(exportState, (/ history_nearest_dtos_field_bundle /), rc=rc); ESMF_ERR(rc)
-      end if
-
-      if (num_history_nearest_stod_vars > 0) then
-        call ufs_mpas_create_history_bundle(history_nearest_stod_field_bundle, history_nearest_stod_vars(1:num_history_nearest_stod_vars), 'nearest_stod', rc=rc); ESMF_ERR(rc)
-        call ESMF_StateAdd(exportState, (/ history_nearest_stod_field_bundle /), rc=rc); ESMF_ERR(rc)
-      end if
-
-      if (num_history_patch_vars > 0) then
-        call ufs_mpas_create_history_bundle(history_patch_field_bundle, history_patch_vars(1:num_history_patch_vars), 'patch', rc=rc); ESMF_ERR(rc)
-        call ESMF_StateAdd(exportState, (/ history_patch_field_bundle /), rc=rc); ESMF_ERR(rc)
-      end if
-
-      if (num_history_conserve_vars > 0) then
-        call ufs_mpas_create_history_bundle(history_conserve_field_bundle, history_conserve_vars(1:num_history_conserve_vars), 'conserve', rc=rc); ESMF_ERR(rc)
-        call ESMF_StateAdd(exportState, (/ history_conserve_field_bundle /), rc=rc); ESMF_ERR(rc)
-      end if
-
-      ! Test history type bundle on mesh, using restart array bundle
-      call ufs_mpas_create_restart_array_bundle(history_array_bundle, bundle_name='history_native', stream_name='output', rc=rc); ESMF_ERR(rc)
-      call ESMF_InfoGetFromHost(history_array_bundle, info=info, rc=rc); ESMF_ERR(rc)
-      call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
-      call ESMF_StateAdd(exportState, (/ history_array_bundle /), rc=rc); ESMF_ERR(rc)
-
-      ! call ufs_mpas_create_restart_array_bundle(diag_bundle, bundle_name='diag_native', stream_name='diagnostics', rc=rc); ESMF_ERR(rc)
-      ! call ESMF_InfoGetFromHost(diag_bundle, info=info, rc=rc); ESMF_ERR(rc)
-      ! call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
-      ! call ESMF_StateAdd(exportState, (/ diag_bundle /), rc=rc); ESMF_ERR(rc)
-
-      ! Restart bundle
-      if (quilting_restart) then
-        ! use FieldBundle
-        ! call ufs_mpas_create_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
-        ! call ESMF_InfoGetFromHost(restart_field_bundle, info=info, rc=rc); ESMF_ERR(rc)
-        ! call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
-        ! call ESMF_StateAdd(exportState, (/ restart_field_bundle /), rc=rc); ESMF_ERR(rc)
-
-        ! use ArrayBundle
-        call ufs_mpas_create_restart_array_bundle(restart_array_bundle, bundle_name='restart_mpas_array', stream_name='restart', rc=rc); ESMF_ERR(rc)
-        call ESMF_InfoGetFromHost(restart_array_bundle, info=info, rc=rc); ESMF_ERR(rc)
-        call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
-        call ESMF_StateAdd(exportState, (/ restart_array_bundle /), rc=rc); ESMF_ERR(rc)
-      end if ! quilting_restart
+      call ufs_mpas_wgc_output_initialize(exportState, ngrids)
     end if ! quilting
 
-    ngrids = 1
+    if (ngrids == 0) ngrids = 1
     allocate(is_moving(ngrids))
     is_moving = .false.
     call ESMF_InfoGetFromHost(exportState, info=info, rc=rc); ESMF_ERR(rc)
@@ -488,37 +411,9 @@ contains
 
     if (quilting) then
       if (ANY(nint(output_fh(:)*3600.0) == seconds)) then
-        if (num_history_bilinear_vars > 0) then
-         call ufs_mpas_update_history_bundle(history_bilinear_field_bundle, history_bilinear_vars(1:num_history_bilinear_vars), rc=rc); ESMF_ERR(rc)
-        end if
-        if (num_history_nearest_dtos_vars > 0) then
-          call ufs_mpas_update_history_bundle(history_nearest_dtos_field_bundle, history_nearest_dtos_vars(1:num_history_nearest_dtos_vars), rc=rc); ESMF_ERR(rc)
-        end if
-        if (num_history_nearest_stod_vars > 0) then
-          call ufs_mpas_update_history_bundle(history_nearest_stod_field_bundle, history_nearest_stod_vars(1:num_history_nearest_stod_vars), rc=rc); ESMF_ERR(rc)
-        end if
-        if (num_history_patch_vars > 0) then
-          call ufs_mpas_update_history_bundle(history_patch_field_bundle, history_patch_vars(1:num_history_patch_vars), rc=rc); ESMF_ERR(rc)
-        end if
-        if (num_history_conserve_vars > 0) then
-          call ufs_mpas_update_history_bundle(history_conserve_field_bundle, history_conserve_vars(1:num_history_conserve_vars), rc=rc); ESMF_ERR(rc)
-        end if
-
-        ! Test history type bundle on mesh, using restart array bundle
-        call ufs_mpas_update_restart_array_bundle(history_array_bundle, stream_name='output', rc=rc); ESMF_ERR(rc)
-        ! call ufs_mpas_update_restart_array_bundle(diag_bundle, stream_name='diagnostics', rc=rc); ESMF_ERR(rc)
+        call ufs_mpas_wgc_output_update(seconds)
       end if
-
-      ! Update restart bundle
-      if (quilting_restart) then
-        if (ANY(frestart(:) == seconds)) then
-          ! call ufs_mpas_update_restart_bundle(restart_field_bundle, rc=rc); ESMF_ERR(rc)
-
-          call ufs_mpas_update_restart_array_bundle(restart_array_bundle, stream_name='restart', rc=rc); ESMF_ERR(rc)
-
-        end if
-      end if ! quilting
-    end if ! quilting_restart
+    end if ! quilting
 
     ! Timing info (debug mode)
     if (mype == 0) write(*,'(A,I8,A,F8.3,A,F8.3)') &
@@ -574,82 +469,14 @@ contains
 
     call mpas_finalize(corelist, domain)
 
+    if (quilting) then
+      call ufs_mpas_wgc_output_finalize()
+    end if
+
     ! Timing info (debug mode)
     if (mype == 0) write(*,*)'PASS(fcst_finalize): total is ', mpi_wtime() - tbeg1
 
   end subroutine fcst_finalize
-
-  subroutine parse_history_list_vars(rc)
-
-   integer, intent(out) :: rc
-
-   integer :: file_unit, i, io_status
-   character(len=256) :: filename
-   logical :: file_too_long
-   character(len=64) :: var_name, var_interp_method
-
-   rc = 0
-
-   filename = 'ufs_mpasmodel_wgc_history_list'
-   open(newunit=file_unit, file=trim(filename), status='old', action='read', iostat=io_status)
-   if (io_status /= 0) then
-       write(0, '(A,A,A)') "Error: Cannot open file '", trim(filename), "'. Check if the file exists."
-       rc = 1
-       return
-   end if
-
-   file_too_long = .false.
-
-   do i = 1, max_num_history_vars + 1  ! Add 1 to explicitly detect overflow
-
-      read(file_unit, *, iostat=io_status) var_name, var_interp_method
-
-      if (io_status < 0) then
-          exit  ! Normal end of file
-      else if (io_status > 0) then
-          write(0, '(A,I0,A)') "Error reading line ", i, " in file "//trim(filename)
-          rc = 1
-          return
-      end if
-
-      if (i > max_num_history_vars) then
-          file_too_long = .true.
-          exit
-      end if
-
-      ! Skip other interpolation methods
-      if (trim(var_interp_method) == 'bilinear') then
-          num_history_bilinear_vars = num_history_bilinear_vars + 1
-          history_bilinear_vars(num_history_bilinear_vars) = trim(var_name)
-      else if (trim(var_interp_method) == 'nearest_dtos') then
-          num_history_nearest_dtos_vars = num_history_nearest_dtos_vars + 1
-          history_nearest_dtos_vars(num_history_nearest_dtos_vars) = trim(var_name)
-      else if (trim(var_interp_method) == 'nearest_stod') then
-          num_history_nearest_stod_vars = num_history_nearest_stod_vars + 1
-          history_nearest_stod_vars(num_history_nearest_stod_vars) = trim(var_name)
-      else if (trim(var_interp_method) == 'patch') then
-          num_history_patch_vars = num_history_patch_vars + 1
-          history_patch_vars(num_history_patch_vars) = trim(var_name)
-      else if (trim(var_interp_method) == 'conserve') then
-          num_history_conserve_vars = num_history_conserve_vars + 1
-          history_conserve_vars(num_history_conserve_vars) = trim(var_name)
-      else
-          write(0, '(A,I0,A)') "Error on line ", i, " in file "//trim(filename)//", unknown interp_method"
-          rc = 1
-          return
-      end if
-
-   end do
-
-   if (file_too_long) then
-       write(0, '(A)') "Error file "//trim(filename)//" too long. Increase max_num_history_vars"
-       rc = 1
-       return
-   endif
-
-   close(file_unit)
-
-  end subroutine parse_history_list_vars
 
   ! Same as 'fcst_time_array_setup' in fv3, but using ESMF time types instead of FMS types
   subroutine init_frestart(Time_init, Time_end, num_restart_fh, restart_fh)

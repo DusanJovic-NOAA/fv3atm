@@ -740,16 +740,11 @@ module ufsatm_cap_mod
       if (mype == 0) print *,'ufsatm_cap: number of array bundles in fcstComp export state, ABCount= ',ABCount
 
 
-! query the is_moving array from the fcstState (was set by fcstComp.Initialize() above)
-#ifdef FV3
       call ESMF_InfoGetFromHost(fcstState, info=info, rc=rc)
       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
       call ESMF_InfoGetAlloc(info, key="is_moving", values=is_moving, rc=rc)
       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-#else
-      allocate(is_moving(1))
-      is_moving = .false.
-#endif
+
       needGridTransfer = any(is_moving)
 
       allocate(is_moving_fb(FBcount))

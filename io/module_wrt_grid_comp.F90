@@ -253,7 +253,7 @@
      real(ESMF_KIND_R4)                      :: valueR4
      real(ESMF_KIND_R8)                      :: valueR8
      logical, allocatable                    :: is_moving(:)
-     logical                                 :: isPresent
+     logical                                 :: isPresent, found
      integer                                 :: minIndex(2), maxIndex(2)
 
      integer :: ierr
@@ -268,22 +268,22 @@
      integer(ESMF_KIND_I4), pointer :: ptr_i4_d1(:), ptr_i4_d2(:,:), ptr_i4_d3(:,:,:)
      character(64), allocatable :: var_dim_names(:)
      integer :: var_dim_names_count
-    integer :: num_dims_esmf
+     integer :: num_dims_esmf
 
-    character(64), allocatable :: dimension_names(:)
-    integer :: dimSize, dimID, ad(5), itemCount
+     character(64), allocatable :: dimension_names(:)
+     integer :: dimSize, dimID, ad(5), itemCount
 
-    type :: dim_info_t
-      character(64) :: dimName
-      integer :: dimSize
-      integer :: dimId
-    end type
-    type (dim_info_t), allocatable :: dim_info_arr(:)
+     type :: dim_info_t
+       character(64) :: dimName
+       integer :: dimSize
+       integer :: dimId
+     end type
+     type (dim_info_t), allocatable :: dim_info_arr(:)
 
-    logical :: isDecomposed
-    integer :: arrayCount_1
+     logical :: isDecomposed
+     integer :: arrayCount_1
 
-    character(len=ESMF_MAXSTR)           :: arrName
+     character(len=ESMF_MAXSTR)           :: arrName
 
      integer :: attCount, jidx, idx, noutfile
      character(19)  :: newdate
@@ -302,6 +302,7 @@
      character(256)                          :: cf_open, cf_close
      character(256)                          :: gridfile
      integer                                 :: num_output_file
+     character(len=64)                       :: grid_type, grid_projection
 
      type(ESMF_DistGrid)                     :: acceptorDG, newAcceptorDG
      type(ESMF_DistGrid)                     :: acceptorElemDG, newAcceptorElemDG
@@ -403,6 +404,18 @@
 #endif
      endif
 
+     call ESMF_ConfigGetAttribute(config=CF, value=history_file_on_native_grid, default=.false., &
+                                  label='history_file_on_native_grid:', rc=rc)
+     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+     call ESMF_ConfigGetAttribute(config=CF, value=itasks,default=1,label ='itasks:',rc=rc)
+     jtasks = ntasks
+     if(itasks > 0 ) jtasks = ntasks/itasks
+     if( itasks*jtasks /= ntasks ) then
+       itasks = 1
+       jtasks = ntasks
+     endif
+
      allocate(output_file(num_files))
      num_output_file = ESMF_ConfigGetLen(config=CF, label ='output_file:',rc=rc)
      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
@@ -477,6 +490,7 @@
 
      do n=1, ngrids
 
+#ifdef FV3
        if (n == 1) then
          ! for top level domain look directly in cf
          cf_output_grid = cf
@@ -498,14 +512,6 @@
          call ESMF_LogWrite("wrt_initialize_p1: Inline post is not supported with cubed_sphere_grid output",ESMF_LOGMSG_ERROR,rc=RC)
          call ESMF_Finalize(endflag=ESMF_END_ABORT)
        end if
-
-       call ESMF_ConfigGetAttribute(config=CF, value=itasks,default=1,label ='itasks:',rc=rc)
-       jtasks = ntasks
-       if(itasks > 0 ) jtasks = ntasks/itasks
-       if( itasks*jtasks /= ntasks ) then
-         itasks = 1
-         jtasks = ntasks
-       endif
 
        if (trim(output_grid(n)) == 'gaussian_grid' .or. trim(output_grid(n)) == 'global_latlon') then
          call ESMF_ConfigGetAttribute(config=cf_output_grid, value=imo(n), label ='imo:',rc=rc)
@@ -576,6 +582,114 @@
          endif
        endif ! output_grid
 
+       if (cf_output_grid /= cf) then
+         ! destroy the temporary config object created for nest domains
+         call ESMF_ConfigDestroy(config=cf_output_grid, rc=rc)
+         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+       endif
+#endif
+
+#ifdef MPASMODEL
+       ! For MPAS Model instead of looking at <output_grid_  > sections in model_configure, look at fcstFB info data for this grid_id
+       ! We need to find field bundle that has /grid_id equal to this 'grid', ( = n)
+       call ESMF_StateGet(imp_state_write, itemCount=fcstItemCount, rc=rc); ESMF_ERR(rc)
+       allocate(fcstItemNameList(fcstItemCount), fcstItemTypeList(fcstItemCount))
+       call ESMF_StateGet(imp_state_write, itemNameList=fcstItemNameList, itemTypeList=fcstItemTypeList, rc=rc); ESMF_ERR(rc)
+
+       ! loop over all items in the imp_state_write and check grid_id
+       found = .false.
+       do i=1, fcstItemCount
+         if (fcstItemTypeList(i) == ESMF_STATEITEM_FIELDBUNDLE) then
+           call ESMF_StateGet(imp_state_write, itemName=fcstItemNameList(i), fieldbundle=fcstFB, rc=rc); ESMF_ERR(rc)
+           call ESMF_InfoGetFromHost(fcstFB, info=info, rc=rc); ESMF_ERR(rc)
+           call ESMF_InfoGet(info, key="/NetCDF/FV3/grid_id", value=grid_id, rc=rc); ESMF_ERR(rc)
+           if (grid_id == n) then
+             call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_type', value=grid_type, default='', rc=rc); ESMF_ERR(rc)
+             call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/projection', value=grid_projection, default='', rc=rc); ESMF_ERR(rc)
+
+             output_grid(n) = trim(grid_projection)
+
+             if (trim(grid_projection) /= '') then
+               if (trim(grid_projection) == 'global_latlon') then
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/imo',     value=imo(n),     rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/jmo',     value=jmo(n),     rc=rc); ESMF_ERR(rc)
+               else if (trim(grid_projection) == 'regional_latlon') then
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/lon1',    value=lon1(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/lat1',    value=lat1(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/lon2',    value=lon2(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/lat2',    value=lat2(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/dlon',    value=dlon(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/dlat',    value=dlat(n),    rc=rc); ESMF_ERR(rc)
+                 imo(n) = (lon2(n)-lon1(n))/dlon(n) + 1
+                 jmo(n) = (lat2(n)-lat1(n))/dlat(n) + 1
+                 if (lprnt) then
+                   print *,'lon1=',lon1(n),' lat1=',lat1(n)
+                   print *,'lon2=',lon2(n),' lat2=',lat2(n)
+                   print *,'dlon=',dlon(n),' dlat=',dlat(n)
+                   print *,'imo =',imo(n), ' jmo =',jmo(n)
+                 end if
+               else if (trim(grid_projection) == 'rotated_latlon') then
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/cen_lon', value=cen_lon(n), rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/cen_lat', value=cen_lat(n), rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/lon1',    value=lon1(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/lat1',    value=lat1(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/lon2',    value=lon2(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/lat2',    value=lat2(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/dlon',    value=dlon(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/dlat',    value=dlat(n),    rc=rc); ESMF_ERR(rc)
+                 imo(n) = (lon2(n)-lon1(n))/dlon(n) + 1
+                 jmo(n) = (lat2(n)-lat1(n))/dlat(n) + 1
+                 if (lprnt) then
+                   print *,'cen_lon=',cen_lon(n),' cen_lat=',cen_lat(n)
+                   print *,'lon1   =',lon1(n),   ' lat1   =',lat1(n)
+                   print *,'lon2   =',lon2(n),   ' lat2   =',lat2(n)
+                   print *,'dlon   =',dlon(n),   ' dlat   =',dlat(n)
+                   print *,'imo    =',imo(n),    ' jmo    =',jmo(n)
+                 end if
+               else if (trim(grid_projection) == 'lambert_conformal') then
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/cen_lon', value=cen_lon(n), rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/cen_lat', value=cen_lat(n), rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/cen_lat', value=cen_lat(n), rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/stdlat1', value=stdlat1(n), rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/stdlat2', value=stdlat2(n), rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/lon1',    value=lon1(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/lat1',    value=lat1(n),    rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/dx',      value=dx(n),      rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/dy',      value=dy(n),      rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/nx',      value=imo(n),     rc=rc); ESMF_ERR(rc)
+                 call ESMF_InfoGet(info, key='/NetCDF/FV3-nooutput/grid_spec/ny',      value=jmo(n),     rc=rc); ESMF_ERR(rc)
+                 if (lprnt) then
+                   print *,'cen_lon=',cen_lon(n),' cen_lat=',cen_lat(n)
+                   print *,'stdlat1=',stdlat1(n),' stdlat2=',stdlat2(n)
+                   print *,'lon1=',lon1(n),' lat1=',lat1(n)
+                   print *,'nx=',imo(n), ' ny=',jmo(n)
+                   print *,'dx=',dx(n),' dy=',dy(n)
+                 endif
+               else
+                 write(0,*)'ERROR: Unknown grid_projection: ', trim(grid_projection)
+                 ESMF_ERR(1)
+               end if
+             else
+               write(0,*)'Unexpeceted: This field bundle should have grid_projection defined.'
+               ESMF_ERR(1)
+             end if ! grid_type
+
+             ! Okay, we found a fcst field bundle whose `grid_id` is equal to `n`(this grid), we can now get grid projection parameters
+             found = .true.
+             exit
+
+           end if ! grid_id == n
+         end if ! ESMF_STATEITEM_FIELDBUNDLE
+       end do
+
+       if (.not.found) then
+         write(0,*)'Did not find fcst field bundle with grid_id = ', n
+         ESMF_ERR(1)
+       end if
+
+       deallocate(fcstItemNameList, fcstItemTypeList)
+#endif
+
        ! chunksizes for netcdf_parallel
        call ESMF_ConfigGetAttribute(config=CF,value=ichunk2d(n),default=0,label ='ichunk2d:',rc=rc)
        call ESMF_ConfigGetAttribute(config=CF,value=jchunk2d(n),default=0,label ='jchunk2d:',rc=rc)
@@ -615,15 +729,7 @@
            print *,'zstandard_level=',zstandard_level(n)
        end if
 
-       if (cf_output_grid /= cf) then
-         ! destroy the temporary config object created for nest domains
-         call ESMF_ConfigDestroy(config=cf_output_grid, rc=rc)
-         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
-       endif
-
-       call ESMF_ConfigGetAttribute(config=CF, value=history_file_on_native_grid, default=.false., &
-                                    label='history_file_on_native_grid:', rc=rc)
-       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+       ! Start creating wrtGrid(s)
 
        if (n == 1 .and. top_parent_is_global .and. history_file_on_native_grid) then
          do tl=1,6
@@ -1416,7 +1522,6 @@
             dim_info_arr(n) % dimSize = dimSIze
          end do
 
-
          ! Create distgrids for cell, vertex and edge arrays
          localpet = wrt_int_state%mype
          nprocs = wrt_int_state%petcount
@@ -1426,12 +1531,11 @@
          call ESMF_InfoGet(bundle_info, key='/NetCDF/FV3/dimensions/nVertices', value=nVertices, rc=rc); ESMF_ERR(rc)
          call ESMF_InfoGet(bundle_info, key='/NetCDF/FV3/dimensions/nEdges', value=nEdges,default=1024, rc=rc); ESMF_ERR(rc)
 
-         if (lprnt) then
-           print *,'nCells   =',nCells
-           print *,'nVertices=',nVertices
-           print *,'nEdges   =',nEdges
-         end if
-
+         ! if (lprnt) then
+         !   print *,'nCells   =',nCells
+         !   print *,'nVertices=',nVertices
+         !   print *,'nEdges   =',nEdges
+         ! end if
 
          allocate(cell_counts(nprocs))
          allocate(vertex_counts(nprocs))

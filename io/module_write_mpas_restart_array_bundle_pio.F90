@@ -600,9 +600,9 @@ module module_write_mpas_restart_array_bundle_pio
    end do
 
 #ifdef MPAS_SMIOL_SUPPORT
-   retVal = SMIOLf_define_att(smiol_file, '', 'created_by', 'UFSATM Write Component - SMIOL')
+   retVal = SMIOLf_define_att(smiol_file, '', 'file_id', 'UFSATM Write Component - SMIOL')
 #else
-   retVal = pio_put_att(pioFileDesc, PIO_GLOBAL, 'created_by', 'UFSATM Write Component - PIO')
+   retVal = pio_put_att(pioFileDesc, PIO_GLOBAL, 'file_id', 'UFSATM Write Component - PIO')
 #endif
    call errorHandle("Could not end define mode", retVal)
 

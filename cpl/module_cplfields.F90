@@ -24,7 +24,7 @@ module module_cplfields
 
 ! Export Fields ----------------------------------------
 
-#ifdef FV3
+#if defined(FV3) || defined(MPAS)
   ! Please specify fields as: FieldInfo("standard_name", "type")
   ! Field types should be provided according to the table below:
   !  g : soil levels (3D)

@@ -22,21 +22,61 @@ module ufs_mpas_wgc_output
   use module_mpasmodel_config, only : nCellsGlobal, nVerticesGlobal, nEdgesGlobal
   use module_mpasmodel_config, only : nCellsSolve, nVerticesSolve, nEdgesSolve
   use module_mpasmodel_config, only : domain_ptr => domain
+  use module_mpasmodel_config, only : frestart
 
   implicit none
 
   private
 
+  public :: ufs_mpas_wgc_output_initialize
+  public :: ufs_mpas_wgc_output_update
+  public :: ufs_mpas_wgc_output_finalize
+
   public :: ufs_mpas_get_esmf_mesh
 
-  public :: ufs_mpas_create_history_bundle
-  public :: ufs_mpas_update_history_bundle
+  integer, parameter, public :: max_num_output_vars = 1000
 
-  public :: ufs_mpas_create_restart_bundle
-  public :: ufs_mpas_update_restart_bundle
+  type, public :: ufs_mpas_output_type
 
-  public :: ufs_mpas_create_restart_array_bundle
-  public :: ufs_mpas_update_restart_array_bundle
+     ! Unique name of this output.
+     ! There must be no other instance of this type using the same name
+     character(len=64) :: name = ''
+     ! Grid type. Currentlly supported: 'regridded', 'mpas_mesh'
+     character(len=64) :: grid_type = ''
+     character(len=64) :: list_of_vars_fname = ''
+     character(len=64) :: mpas_stream = ''
+     real(ESMF_KIND_R8), allocatable, dimension(:) :: output_fh
+
+     character(len=64) :: grid_projection = ''
+     real :: cen_lon, cen_lat, stdlat1, stdlat2, lon1, lat1, lon2, lat2, dlon, dlat, dx, dy
+     integer :: nx, ny, imo, jmo
+
+     ! Field bundles for 5 different remappings
+     type(ESMF_FieldBundle) :: bilinear_field_bundle
+     type(ESMF_FieldBundle) :: nearest_dtos_field_bundle
+     type(ESMF_FieldBundle) :: nearest_stod_field_bundle
+     type(ESMF_FieldBundle) :: patch_field_bundle
+     type(ESMF_FieldBundle) :: conserve_field_bundle
+     ! List of variables for 5 different remappings
+     character(len=64) :: bilinear_vars(max_num_output_vars)
+     character(len=64) :: nearest_dtos_vars(max_num_output_vars)
+     character(len=64) :: nearest_stod_vars(max_num_output_vars)
+     character(len=64) :: patch_vars(max_num_output_vars)
+     character(len=64) :: conserve_vars(max_num_output_vars)
+     ! Number of actual variables for 5 differenr rempappings
+     integer :: num_bilinear_vars = 0
+     integer :: num_nearest_dtos_vars = 0
+     integer :: num_nearest_stod_vars = 0
+     integer :: num_patch_vars = 0
+     integer :: num_conserve_vars = 0
+
+     ! Array bundle if this output is on native mesh
+     type(ESMF_ArrayBundle) :: native_mesh_array_bundle
+
+  end type ufs_mpas_output_type
+
+  type(ufs_mpas_output_type), dimension(:), allocatable, public :: ufs_mpas_outputs
+  integer, public :: num_streams
 
   ! FIXME: Temporary fix to get bit-identical outputs from both PIO and SMIOL
   ! Use this value instead the one defined in mpas_io.F to be consistent between PIO and SMIOL
@@ -44,38 +84,250 @@ module ufs_mpas_wgc_output
 
 contains
 
- subroutine ufs_mpas_create_history_bundle(output_bundle, output_vars, interp_method, rc)
+ subroutine ufs_mpas_wgc_output_initialize(exportState, ngrids)
 
-   type(ESMF_FieldBundle), intent(out) :: output_bundle
-   character(len=*), intent(in)        :: output_vars(:)
-   character(len=*), intent(in)        :: interp_method
-   integer, intent(out)                :: rc
+   implicit none
 
-   type(ESMF_Info) :: bundle_info
-   character(*), parameter :: subname = 'ufs_mpas_create_history_bundle'
+   type(ESMF_State) :: exportState
+   integer, intent(inout) :: ngrids
 
-   call ufs_mpas_create_output_bundle(output_bundle, 'atm_'//trim(interp_method), output_vars, rc); ESMF_ERR(rc)
+   ! Local
+   integer :: i, j, rc
+   type(ESMF_Info) :: info
+   logical :: isArray, isSequence, asOkay
+   type(ESMF_HConfig) :: hconfig, streams_hconfig, stream_hconfig, grid_spec_hconfig
 
-   call ESMF_InfoGetFromHost(output_bundle, info=bundle_info, rc=rc); ESMF_ERR(rc)
-   ! call ESMF_FieldBundlePrint(output_bundle, rc=rc); ESMF_ERR(rc)
-   ! write(*,*)'bundle '//trim(interp_method)
-   ! call ESMF_InfoPrint(bundle_info, rc=rc); ESMF_ERR(rc)
+   hconfig = ESMF_HConfigCreate(filename="ufs_mpas_streams.yaml", rc=rc); ESMF_ERR(rc)
 
- end subroutine ufs_mpas_create_history_bundle
+   isSequence = ESMF_HConfigIsSequence(hconfig, keyString='streams', rc=rc); ESMF_ERR(rc)
+   if (.not.isSequence) then
+      write(0,*)"ERROR: 'streams' must be a Sequence"
+      call exit
+   end if
 
- subroutine ufs_mpas_update_history_bundle(output_bundle, output_vars, rc)
+   num_streams = ESMF_HConfigGetSize(hconfig, keyString='streams', rc=rc); ESMF_ERR(rc)
 
-   type(ESMF_FieldBundle), intent(inout) :: output_bundle
-   character(len=*), intent(in)          :: output_vars(:)
-   integer, intent(out)                  :: rc
+   allocate(ufs_mpas_outputs(num_streams))
 
-   character(*), parameter :: subname = 'ufs_mpas_update_history_bundle'
+   streams_hconfig = ESMF_HConfigCreateAt(hconfig, keyString='streams', rc=rc); ESMF_ERR(rc)
 
-   call ufs_mpas_update_output_bundle(output_bundle, output_vars, rc); ESMF_ERR(rc)
+   do i=1,num_streams
+      stream_hconfig = ESMF_HConfigCreateAt(streams_hconfig, index=i, rc=rc); ESMF_ERR(rc)
 
- end subroutine ufs_mpas_update_history_bundle
+      ufs_mpas_outputs(i) % name = ESMF_HConfigAsString(stream_hconfig, keyString='name',rc=rc); ESMF_ERR(rc)
+      ufs_mpas_outputs(i) % grid_type = ESMF_HConfigAsString(stream_hconfig, keyString='grid_type',rc=rc); ESMF_ERR(rc)
+       if (trim(ufs_mpas_outputs(i) % grid_type) /= 'regridded' .and. trim(ufs_mpas_outputs(i) % grid_type) /= 'mpas_mesh') then
+          write(0,*)"ERROR: Unknown 'grid_type' for stream ",trim(ufs_mpas_outputs(i) % name), ' grid_type: ',trim(ufs_mpas_outputs(i) % grid_type)
+          ESMF_ERR(1)
+       end if
 
- subroutine ufs_mpas_create_output_bundle(output_bundle, bundle_name, output_vars, rc)
+      ufs_mpas_outputs(i) % list_of_vars_fname = ESMF_HConfigAsString(stream_hconfig, keyString='list_of_vars_fname', asOkay=asOkay, rc=rc); ESMF_ERR(rc)
+      ufs_mpas_outputs(i) % mpas_stream = ESMF_HConfigAsString(stream_hconfig, keyString='mpas_stream', asOkay=asOkay, rc=rc); ESMF_ERR(rc)
+
+      if (trim(ufs_mpas_outputs(i) % grid_type) == 'regridded') then
+         grid_spec_hconfig = ESMF_HConfigCreateAt(stream_hconfig, keyString='grid_spec', rc=rc); ESMF_ERR(rc)
+         ufs_mpas_outputs(i) % grid_projection = ESMF_HConfigAsString(grid_spec_hconfig, keyString='projection', rc=rc); ESMF_ERR(rc)
+         if (trim(ufs_mpas_outputs(i) % grid_projection) == 'global_latlon') then
+           ufs_mpas_outputs(i) % imo     = ESMF_HConfigAsI4(grid_spec_hconfig, keyString='imo',     rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % jmo     = ESMF_HConfigAsI4(grid_spec_hconfig, keyString='jmo',     rc=rc); ESMF_ERR(rc)
+         else if (trim(ufs_mpas_outputs(i) % grid_projection) == 'regional_latlon') then
+           ufs_mpas_outputs(i) % lon1    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='lon1',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % lat1    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='lat1',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % lon2    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='lon2',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % lat2    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='lat2',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % dlon    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='dlon',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % dlat    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='dlat',    rc=rc); ESMF_ERR(rc)
+         else if (trim(ufs_mpas_outputs(i) % grid_projection) == 'rotated_latlon') then
+           ufs_mpas_outputs(i) % cen_lon = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='cen_lon', rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % cen_lat = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='cen_lat', rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % lon1    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='lon1',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % lat1    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='lat1',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % lon2    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='lon2',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % lat2    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='lat2',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % dlon    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='dlon',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % dlat    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='dlat',    rc=rc); ESMF_ERR(rc)
+         else if (trim(ufs_mpas_outputs(i) % grid_projection) == 'lambert_conformal') then
+           ufs_mpas_outputs(i) % cen_lon = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='cen_lon', rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % cen_lat = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='cen_lat', rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % stdlat1 = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='stdlat1', rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % stdlat2 = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='stdlat2', rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % lon1    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='lon1',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % lat1    = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='lat1',    rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % dx      = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='dx',      rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % dy      = ESMF_HConfigAsR4(grid_spec_hconfig, keyString='dy',      rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % nx      = ESMF_HConfigAsI4(grid_spec_hconfig, keyString='nx',      rc=rc); ESMF_ERR(rc)
+           ufs_mpas_outputs(i) % ny      = ESMF_HConfigAsI4(grid_spec_hconfig, keyString='ny',      rc=rc); ESMF_ERR(rc)
+         end if
+         call ESMF_HConfigDestroy(grid_spec_hconfig, rc=rc); ESMF_ERR(rc)
+      end if
+      ufs_mpas_outputs(i) % output_fh = ESMF_HConfigAsR4Seq(stream_hconfig, keyString='output_fh', rc=rc); ESMF_ERR(rc)
+
+      call ESMF_HConfigDestroy(stream_hconfig, rc=rc); ESMF_ERR(rc)
+   end do
+
+   call ESMF_HConfigDestroy(streams_hconfig, rc=rc); ESMF_ERR(rc)
+
+   call ESMF_HConfigDestroy(hconfig, rc=rc); ESMF_ERR(rc)
+
+   do i=1,num_streams
+
+      if (trim(ufs_mpas_outputs(i) % grid_type) /= 'mpas_mesh') then
+
+         ngrids = ngrids + 1 ! count only remapped output grids
+
+         call parse_output_list_vars(ufs_mpas_outputs(i), rc)
+
+         if (ufs_mpas_outputs(i) % num_bilinear_vars > 0) then
+           call ufs_mpas_create_output_bundle(ufs_mpas_outputs(i) % bilinear_field_bundle, &
+                                              trim(ufs_mpas_outputs(i) % name)//'_bilinear', &
+                                              trim(ufs_mpas_outputs(i) % name), &
+                                              ufs_mpas_outputs(i) % bilinear_vars(1:ufs_mpas_outputs(i) % num_bilinear_vars), &
+                                              ngrids, &
+                                              ufs_mpas_output = ufs_mpas_outputs(i), &
+                                              rc=rc); ESMF_ERR(rc)
+           call ESMF_StateAdd(exportState, (/ ufs_mpas_outputs(i) % bilinear_field_bundle /), rc=rc); ESMF_ERR(rc)
+         end if
+
+         if (ufs_mpas_outputs(i) % num_nearest_dtos_vars > 0) then
+           call ufs_mpas_create_output_bundle(ufs_mpas_outputs(i) % nearest_dtos_field_bundle, &
+                                              trim(ufs_mpas_outputs(i) % name)//'_nearest_dtos', &
+                                              trim(ufs_mpas_outputs(i) % name), &
+                                              ufs_mpas_outputs(i) % nearest_dtos_vars(1:ufs_mpas_outputs(i) % num_nearest_dtos_vars), &
+                                              ngrids, &
+                                              ufs_mpas_output = ufs_mpas_outputs(i), &
+                                              rc=rc); ESMF_ERR(rc)
+           call ESMF_StateAdd(exportState, (/ ufs_mpas_outputs(i) % nearest_dtos_field_bundle /), rc=rc); ESMF_ERR(rc)
+         end if
+
+         if (ufs_mpas_outputs(i) % num_nearest_stod_vars > 0) then
+           call ufs_mpas_create_output_bundle(ufs_mpas_outputs(i) % nearest_stod_field_bundle, &
+                                              trim(ufs_mpas_outputs(i) % name)//'_nearest_stod', &
+                                              trim(ufs_mpas_outputs(i) % name), &
+                                              ufs_mpas_outputs(i) % nearest_stod_vars(1:ufs_mpas_outputs(i) % num_nearest_stod_vars), &
+                                              ngrids, &
+                                              ufs_mpas_output = ufs_mpas_outputs(i), &
+                                              rc=rc); ESMF_ERR(rc)
+           call ESMF_StateAdd(exportState, (/ ufs_mpas_outputs(i) % nearest_stod_field_bundle /), rc=rc); ESMF_ERR(rc)
+         end if
+
+         if (ufs_mpas_outputs(i) % num_patch_vars > 0) then
+           call ufs_mpas_create_output_bundle(ufs_mpas_outputs(i) % patch_field_bundle, &
+                                              trim(ufs_mpas_outputs(i) % name)//'_patch', &
+                                              trim(ufs_mpas_outputs(i) % name), &
+                                              ufs_mpas_outputs(i) % patch_vars(1:ufs_mpas_outputs(i) % num_patch_vars), &
+                                              ngrids, &
+                                              ufs_mpas_output = ufs_mpas_outputs(i), &
+                                              rc=rc); ESMF_ERR(rc)
+           call ESMF_StateAdd(exportState, (/ ufs_mpas_outputs(i) % patch_field_bundle /), rc=rc); ESMF_ERR(rc)
+         end if
+
+         if (ufs_mpas_outputs(i) % num_conserve_vars > 0) then
+           call ufs_mpas_create_output_bundle(ufs_mpas_outputs(i) % conserve_field_bundle, &
+                                              trim(ufs_mpas_outputs(i) % name)//'_conserve', &
+                                              trim(ufs_mpas_outputs(i) % name), &
+                                              ufs_mpas_outputs(i) % conserve_vars(1:ufs_mpas_outputs(i) % num_conserve_vars), &
+                                              ngrids, &
+                                              ufs_mpas_output = ufs_mpas_outputs(i), &
+                                              rc=rc); ESMF_ERR(rc)
+           call ESMF_StateAdd(exportState, (/ ufs_mpas_outputs(i) % conserve_field_bundle /), rc=rc); ESMF_ERR(rc)
+         end if
+      else !
+         ! 'mpas_mesh' stream; 'restart' or other native mesh streams
+         if (trim(ufs_mpas_outputs(i) % name) == 'restart') then
+            call ufs_mpas_create_restart_array_bundle(ufs_mpas_outputs(i) % native_mesh_array_bundle, &
+                                                      bundle_name='restart_mpas_array', &
+                                                      stream_name='restart', &
+                                                      rc=rc); ESMF_ERR(rc)
+            call ESMF_InfoGetFromHost(ufs_mpas_outputs(i) % native_mesh_array_bundle, info=info, rc=rc); ESMF_ERR(rc)
+            call ESMF_InfoSet(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
+         else
+            if (trim(ufs_mpas_outputs(i) % mpas_stream) == '') then
+               write(0,*)"ERROR: mpas_stream must be specified for outputs on 'mpas_mesh' grid trype"
+               rc = 1
+               ESMF_ERR(rc)
+            end if
+            call ufs_mpas_create_restart_array_bundle(ufs_mpas_outputs(i) % native_mesh_array_bundle, &
+                                                      bundle_name=trim(ufs_mpas_outputs(i) % name), &
+                                                      stream_name=trim(ufs_mpas_outputs(i) % mpas_stream), &
+                                                      rc=rc); ESMF_ERR(rc)
+         end if
+         call ESMF_StateAdd(exportState, (/ ufs_mpas_outputs(i) % native_mesh_array_bundle /), rc=rc); ESMF_ERR(rc)
+      end if
+
+   end do
+
+ end subroutine ufs_mpas_wgc_output_initialize
+
+ subroutine ufs_mpas_wgc_output_update(seconds)
+
+   implicit none
+
+   integer, intent(in) :: seconds
+
+   integer :: i, rc
+
+   do i=1,num_streams
+
+      if (trim(ufs_mpas_outputs(i) % grid_type) /= 'mpas_mesh') then
+
+         if (ufs_mpas_outputs(i) % num_bilinear_vars > 0) then
+           call ufs_mpas_update_output_bundle(ufs_mpas_outputs(i) % bilinear_field_bundle, &
+                                              ufs_mpas_outputs(i) % bilinear_vars(1:ufs_mpas_outputs(i) % num_bilinear_vars), &
+                                              rc=rc); ESMF_ERR(rc)
+         end if
+
+         if (ufs_mpas_outputs(i) % num_nearest_dtos_vars > 0) then
+           call ufs_mpas_update_output_bundle(ufs_mpas_outputs(i) % nearest_dtos_field_bundle, &
+                                              ufs_mpas_outputs(i) % nearest_dtos_vars(1:ufs_mpas_outputs(i) % num_nearest_dtos_vars), &
+                                              rc=rc); ESMF_ERR(rc)
+         end if
+
+         if (ufs_mpas_outputs(i) % num_nearest_stod_vars > 0) then
+           call ufs_mpas_update_output_bundle(ufs_mpas_outputs(i) % nearest_stod_field_bundle, &
+                                              ufs_mpas_outputs(i) % nearest_stod_vars(1:ufs_mpas_outputs(i) % num_nearest_stod_vars), &
+                                              rc=rc); ESMF_ERR(rc)
+         end if
+
+         if (ufs_mpas_outputs(i) % num_patch_vars > 0) then
+           call ufs_mpas_update_output_bundle(ufs_mpas_outputs(i) % patch_field_bundle, &
+                                              ufs_mpas_outputs(i) % patch_vars(1:ufs_mpas_outputs(i) % num_patch_vars), &
+                                              rc=rc); ESMF_ERR(rc)
+         end if
+
+         if (ufs_mpas_outputs(i) % num_conserve_vars > 0) then
+           call ufs_mpas_update_output_bundle(ufs_mpas_outputs(i) % conserve_field_bundle, &
+                                              ufs_mpas_outputs(i) % conserve_vars(1:ufs_mpas_outputs(i) % num_conserve_vars), &
+                                              rc=rc); ESMF_ERR(rc)
+         end if
+      else
+         ! 'mpas_mesh' stream; 'restart' or other native mesh streams
+         if (trim(ufs_mpas_outputs(i) % name) == 'restart') then
+            if (ANY(frestart(:) == seconds)) then
+               call ufs_mpas_update_restart_array_bundle(ufs_mpas_outputs(i) % native_mesh_array_bundle, stream_name='restart', rc=rc); ESMF_ERR(rc)
+            end if
+         else
+            if (trim(ufs_mpas_outputs(i) % mpas_stream) == '') then
+               write(0,*)"ERROR: mpas_stream must be specified for outputs on 'mpas_mesh' grid type"
+               rc = 1
+               ESMF_ERR(rc)
+            end if
+            call ufs_mpas_update_restart_array_bundle(ufs_mpas_outputs(i) % native_mesh_array_bundle, &
+                                                      stream_name=trim(ufs_mpas_outputs(i) % mpas_stream), &
+                                                      rc=rc); ESMF_ERR(rc)
+         end if
+      end if
+
+   end do
+
+ end subroutine ufs_mpas_wgc_output_update
+
+ subroutine ufs_mpas_wgc_output_finalize()
+
+   deallocate(ufs_mpas_outputs)
+
+ end subroutine ufs_mpas_wgc_output_finalize
+
+ subroutine ufs_mpas_create_output_bundle(output_bundle, bundle_name, output_file, output_vars, ngrids, ufs_mpas_output, rc)
 
    use mpas_attlist,       only : att_list_type, att_lists_type, &
                                   MPAS_ATT_INT, MPAS_ATT_INTA, MPAS_ATT_REAL,MPAS_ATT_REALA, MPAS_ATT_TEXT, &
@@ -87,7 +339,10 @@ contains
 
    type(ESMF_FieldBundle), intent(out) :: output_bundle
    character(len=*), intent(in)        :: bundle_name
+   character(len=*), intent(in)        :: output_file
    character(len=*), intent(in)        :: output_vars(:)
+   integer, intent(in)                 :: ngrids
+   type(ufs_mpas_output_type), optional, intent(in) :: ufs_mpas_output
    integer, intent(out)                :: rc
 
    character(*), parameter :: subname = 'ufs_mpas_create_output_bundle'
@@ -308,8 +563,47 @@ contains
    end do
 
    ! bundle attributes
-   call ESMF_InfoSet(bundle_info, key="/NetCDF/FV3/grid_id", value=1, rc=rc); ESMF_ERR(rc)
+   call ESMF_InfoSet(bundle_info, key="/NetCDF/FV3/grid_id", value=ngrids, rc=rc); ESMF_ERR(rc) !grid_id is current value of ngrids counter
    call ESMF_InfoSet(bundle_info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc); ESMF_ERR(rc)
+
+   call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_type', value=trim(ufs_mpas_output % grid_type), rc=rc); ESMF_ERR(rc)
+   call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/projection', value=trim(ufs_mpas_output % grid_projection), rc=rc); ESMF_ERR(rc)
+   if (trim(ufs_mpas_output % grid_projection) == 'global_latlon') then
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/imo',     value=ufs_mpas_output % imo,     rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/jmo',     value=ufs_mpas_output % jmo,     rc=rc); ESMF_ERR(rc)
+   else if (trim(ufs_mpas_output % grid_projection) == 'regional_latlon') then
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/lon1',    value=ufs_mpas_output % lon1,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/lat1',    value=ufs_mpas_output % lat1,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/lon2',    value=ufs_mpas_output % lon2,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/lat2',    value=ufs_mpas_output % lat2,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/dlon',    value=ufs_mpas_output % dlon,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/dlat',    value=ufs_mpas_output % dlat,    rc=rc); ESMF_ERR(rc)
+   else if (trim(ufs_mpas_output % grid_projection) == 'rotated_latlon') then
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/cen_lon', value=ufs_mpas_output % cen_lon, rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/cen_lat', value=ufs_mpas_output % cen_lat, rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/lon1',    value=ufs_mpas_output % lon1,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/lat1',    value=ufs_mpas_output % lat1,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/lon2',    value=ufs_mpas_output % lon2,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/lat2',    value=ufs_mpas_output % lat2,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/dlon',    value=ufs_mpas_output % dlon,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/dlat',    value=ufs_mpas_output % dlat,    rc=rc); ESMF_ERR(rc)
+   else if (trim(ufs_mpas_output % grid_projection) == 'lambert_conformal') then
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/cen_lon', value=ufs_mpas_output % cen_lon, rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/cen_lat', value=ufs_mpas_output % cen_lat, rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/cen_lat', value=ufs_mpas_output % cen_lat, rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/stdlat1', value=ufs_mpas_output % stdlat1, rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/stdlat2', value=ufs_mpas_output % stdlat2, rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/lon1',    value=ufs_mpas_output % lon1,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/lat1',    value=ufs_mpas_output % lat1,    rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/dx',      value=ufs_mpas_output % dx,      rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/dy',      value=ufs_mpas_output % dy,      rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/nx',      value=ufs_mpas_output % nx,      rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(bundle_info, key='/NetCDF/FV3-nooutput/grid_spec/ny',      value=ufs_mpas_output % ny,      rc=rc); ESMF_ERR(rc)
+   else
+      write(0,*)'ERROR: grid_type must be set'
+      rc = 1
+      ESMF_ERR(rc)
+   end if
 
    ! dimensions attributes
    do i = 1, size(dim_info_arr)
@@ -327,7 +621,7 @@ contains
           logical :: is_unique
           integer, pointer :: dimSize_ptr
 
-          call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value="atm", rc=rc); ESMF_ERR(rc)
+          call ESMF_InfoSet(field_info, key="/NetCDF/FV3/output_file", value=trim(output_file), rc=rc); ESMF_ERR(rc)
 
           do i = 1, nDims
             call mpas_pool_get_dimension(block % dimensions, trim(dimNames(i)), dimSize_ptr)
@@ -2838,5 +3132,87 @@ contains
    call postwrite_reindex(allFields, stream % field_pool)
 
  end subroutine ufs_mpas_update_restart_array_bundle
+
+  subroutine parse_output_list_vars(ufs_mpas_outputs, rc)
+
+   type(ufs_mpas_output_type), intent(inout) :: ufs_mpas_outputs
+   integer, intent(out) :: rc
+
+   integer :: file_unit, i, io_status
+   character(len=256) :: filename
+   logical :: file_too_long
+   character(len=64) :: var_name, var_interp_method
+
+   rc = 0
+
+   if (trim(ufs_mpas_outputs % name) == 'restart') then
+      return
+   end if
+
+   filename = ufs_mpas_outputs % list_of_vars_fname
+   if (trim(filename) == '') then
+      write(0,*)'ERROR: list_of_vars_fname for stream '//trim(ufs_mpas_outputs % name)//' is empty '
+      rc = 1
+      return
+   end if
+   open(newunit=file_unit, file=trim(filename), status='old', action='read', iostat=io_status)
+   if (io_status /= 0) then
+       write(0, '(A,A,A)') "Error: Cannot open file '", trim(filename), "'. Check if the file exists."
+       rc = 1
+       return
+   end if
+
+   file_too_long = .false.
+
+   do i = 1, max_num_output_vars + 1  ! Add 1 to explicitly detect overflow
+
+      read(file_unit, *, iostat=io_status) var_name, var_interp_method
+
+      if (io_status < 0) then
+          exit  ! Normal end of file
+      else if (io_status > 0) then
+          write(0, '(A,I0,A)') "Error reading line ", i, " in file "//trim(filename)
+          rc = 1
+          return
+      end if
+
+      if (i > max_num_output_vars) then
+          file_too_long = .true.
+          exit
+      end if
+
+      ! Skip other interpolation methods
+      if (trim(var_interp_method) == 'bilinear') then
+          ufs_mpas_outputs % num_bilinear_vars = ufs_mpas_outputs % num_bilinear_vars + 1
+          ufs_mpas_outputs % bilinear_vars(ufs_mpas_outputs % num_bilinear_vars) = trim(var_name)
+      else if (trim(var_interp_method) == 'nearest_dtos') then
+          ufs_mpas_outputs % num_nearest_dtos_vars = ufs_mpas_outputs % num_nearest_dtos_vars + 1
+          ufs_mpas_outputs % nearest_dtos_vars(ufs_mpas_outputs % num_nearest_dtos_vars) = trim(var_name)
+      else if (trim(var_interp_method) == 'nearest_stod') then
+          ufs_mpas_outputs % num_nearest_stod_vars = ufs_mpas_outputs % num_nearest_stod_vars + 1
+          ufs_mpas_outputs % nearest_stod_vars(ufs_mpas_outputs % num_nearest_stod_vars) = trim(var_name)
+      else if (trim(var_interp_method) == 'patch') then
+          ufs_mpas_outputs % num_patch_vars = ufs_mpas_outputs % num_patch_vars + 1
+          ufs_mpas_outputs % patch_vars(ufs_mpas_outputs % num_patch_vars) = trim(var_name)
+      else if (trim(var_interp_method) == 'conserve') then
+          ufs_mpas_outputs % num_conserve_vars = ufs_mpas_outputs % num_conserve_vars + 1
+          ufs_mpas_outputs % conserve_vars(ufs_mpas_outputs % num_conserve_vars) = trim(var_name)
+      else
+          write(0, '(A,I0,A)') "Error on line ", i, " in file "//trim(filename)//", unknown interp_method"
+          rc = 1
+          return
+      end if
+
+   end do
+
+   if (file_too_long) then
+       write(0, '(A)') "Error file "//trim(filename)//" too long. Increase max_num_output_vars"
+       rc = 1
+       return
+   endif
+
+   close(file_unit)
+
+  end subroutine parse_output_list_vars
 
 end module ufs_mpas_wgc_output
