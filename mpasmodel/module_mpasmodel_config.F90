@@ -4,61 +4,63 @@
 !
 ! #########################################################################################
 module module_mpasmodel_config
-  use mpi_f08
+   use mpi_f08
 
-  use mpas_derived_types, only : core_type, domain_type
+   use mpas_derived_types, only : core_type, domain_type
 
-  implicit none
+   implicit none
 
-  type (core_type), pointer :: corelist => null()
-  type (domain_type), pointer :: domain => null()
+   public
 
-  integer, pointer :: nCellsSolve      ! number of cells that a task solves
-  integer, pointer :: nEdgesSolve      ! number of edges that a task solves
-  integer, pointer :: nVerticesSolve   ! number of vertices (vorticity) that a task solves
-  integer, pointer :: nVertLevels      ! number of vertical layers (midpoints)
+   type(core_type), pointer :: corelist => null()
+   type(domain_type), pointer :: domain => null()
 
-  !> Global gridded data
-  integer :: nCellsGlobal     ! global number of cells/columns
-  integer :: nEdgesGlobal     ! global number of edges
-  integer :: nVerticesGlobal  ! global number of vertices
+   integer, pointer :: nCellsSolve      ! number of cells that a task solves
+   integer, pointer :: nEdgesSolve      ! number of edges that a task solves
+   integer, pointer :: nVerticesSolve   ! number of vertices (vorticity) that a task solves
+   integer, pointer :: nVertLevels      ! number of vertical layers (midpoints)
 
-  !> MPI communicator for the forecast grid component
-  type(MPI_Comm)           :: fcst_mpi_comm
+   !> Global gridded data
+   integer :: nCellsGlobal     ! global number of cells/columns
+   integer :: nEdgesGlobal     ! global number of edges
+   integer :: nVerticesGlobal  ! global number of vertices
 
-  !> Atmosphere time step in seconds
-  integer                  :: dt_atmos
+   !> MPI communicator for the forecast grid component
+   type(MPI_Comm)           :: fcst_mpi_comm
 
-  !> Number of MPAS dycore calls per ATMosphere time step.
-  integer                  :: n_atmos
+   !> Atmosphere time step in seconds
+   integer                  :: dt_atmos
 
-  !> Total number of mpi tasks for the forecast grid components
-  integer                  :: fcst_ntasks
+   !> Number of MPAS dycore calls per ATMosphere time step.
+   integer                  :: n_atmos
 
-  !> The first integration step
-  integer                  :: first_kdt
+   !> Total number of mpi tasks for the forecast grid components
+   integer                  :: fcst_ntasks
 
-  !> ID number for the coupled grids
-  integer                  :: cpl_grid_id
+   !> The first integration step
+   integer                  :: first_kdt
 
-  !> Flag to decide if model writes out coupled diagnostic fields
-  logical                  :: cplprint_flag = .false.
+   !> ID number for the coupled grids
+   integer                  :: cpl_grid_id
 
-  !> Flag to decide if write grid components is used
-  logical                  :: quilting = .false.
+   !> Flag to decide if model writes out coupled diagnostic fields
+   logical                  :: cplprint_flag = .false.
 
-  !> Flag to decide if write grid component writes out restart files
-  logical                  :: quilting_restart = .false.
+   !> Flag to decide if write grid components is used
+   logical                  :: quilting = .false.
 
-  !> Output frequency if this array has only two elements and the value of
-  !! the second eletment is -1. Otherwise, it is the specific output forecast
-  !! hours
-  real,dimension(:),allocatable :: output_fh
+   !> Flag to decide if write grid component writes out restart files
+   logical                  :: quilting_restart = .false.
 
-  !> Restart times in forecast seconds, computed from restart_fh
-  integer, allocatable           :: frestart(:)
+   !> Output frequency if this array has only two elements and the value of
+   !! the second eletment is -1. Otherwise, it is the specific output forecast
+   !! hours
+   real,dimension(:),allocatable :: output_fh
 
-  !> Calendar type
-  character(17)            :: calendar='                 '
+   !> Restart times in forecast seconds, computed from restart_fh
+   integer, allocatable           :: frestart(:)
+
+   !> Calendar type
+   character(17)            :: calendar = '                 '
 
 end module module_mpasmodel_config

@@ -1,0 +1,9 @@
+[check]
+# C061 subroutine argument '<name>' missing 'intent' attribute
+# C121 'use' statement missing 'only' clause
+# S081 unnecessary semicolon   (must ignore due to our use of '; ESMF_ERR(rc)')
+ignore = ["C061", "C121", "S081"]
+line-length = 256
+
+[check.strings]
+quotes = "single"

@@ -54,7 +54,7 @@ module module_write_mpas_restart_field_bundle_pio
 
     integer :: fieldCount
 
-    type(ESMF_Field)                     :: field_indexToCellID, field_indexToVertexID, field_indexToEdgeID
+    type(ESMF_Field)                     :: field_indexToCellID, field_indexToVertexID ! , field_indexToEdgeID
     type(ESMF_TypeKind_Flag)             :: typekind
     type(ESMF_Field)                     :: field
     character(len=ESMF_MAXSTR)           :: arrName
@@ -62,9 +62,7 @@ module module_write_mpas_restart_field_bundle_pio
     integer :: ierr
 
     integer :: rank_esmf
-    integer :: rank, deCount, localDeCount, dimCount, tileCount, tile_number
-    integer, dimension(:,:), allocatable :: minIndexPTile, maxIndexPTile
-    integer, dimension(:), allocatable :: minIndexPDimPDe, maxIndexPDimPDe
+    integer :: rank
 
     integer :: num_dims_esmf
 
@@ -90,8 +88,8 @@ module module_write_mpas_restart_field_bundle_pio
       character(64) :: dimName
       integer :: dimSize
       integer :: dimId
-    end type
-    type (dim_info_t), allocatable :: dim_info_arr(:)
+    end type dim_info_t
+    type(dim_info_t), allocatable :: dim_info_arr(:)
 
     type :: var_info_t
       character(64) :: varName
@@ -101,22 +99,21 @@ module module_write_mpas_restart_field_bundle_pio
       integer, allocatable :: locArrayShape(:)
       integer :: rank
       integer :: pio_type
-      logical :: isESMFArray = .false.
+      logical :: isESMFArray
       type(var_desc_t) :: varid
       type(io_desc_t)  :: iodesc
-    end type
-    type (var_info_t), allocatable :: var_info_arr(:)
+    end type var_info_t
+    type(var_info_t), allocatable :: var_info_arr(:)
 
     type :: decomp_info_t
       integer :: pio_type
       integer, allocatable :: array_shape(:)
       integer, allocatable :: array_index(:)
-      ! integer, allocatable :: compdof(:)
-      type (io_desc_t) :: iodesc
+      type(io_desc_t) :: iodesc
     end type decomp_info_t
     integer, parameter :: max_decomp_info_arr = 30
-    type (decomp_info_t) :: decomp_info_arr(max_decomp_info_arr)
-    integer :: num_decomp_info_array = 0
+    type(decomp_info_t) :: decomp_info_arr(max_decomp_info_arr)
+    integer :: num_decomp_info_array
 
     integer               :: retVal
     integer               :: stride
@@ -124,21 +121,18 @@ module module_write_mpas_restart_field_bundle_pio
     integer               :: numAggregator
     type(iosystem_desc_t) :: pioIoSystem(1)
     type(file_desc_t)     :: pioFileDesc
-    type(var_desc_t)      :: pioVar
-    ! type(io_desc_t)       :: iodescCells, iodescVertices, iodescEdges
     integer               :: iotype
     integer               :: pio_type
-    integer, allocatable  :: compdof(:)
-    ! integer :: nCells, nVertices, nEdges
     logical :: added_time_dim
     logical :: isDecomposed
     logical :: isPresent
-    integer :: i1, i2, i3, i4, i5
     character(len=64), allocatable :: var_att_names(:)
     character(len=512) :: key
-    integer(kind=pio_offset_kind) :: frame=1
+    integer(kind=pio_offset_kind) :: frame
 
     num_decomp_info_array = 0
+
+    frame = 1
 
     call MPI_Comm_Size(comm, nproc, ierr)
     if (ierr /= 0) call ESMF_Finalize(endflag=ESMF_END_ABORT)
@@ -180,17 +174,11 @@ module module_write_mpas_restart_field_bundle_pio
     ! Gather information about variables
     call ESMF_InfoGetAlloc(bundle_info, key='/NetCDF/FV3/variable_names', values=variable_names, itemCount=var_count, rc=rc); ESMF_ERR(rc)
 
-    ! call ESMF_InfoGet(bundle_info, key='/MPAS/nCells', value=nCells, rc=rc); ESMF_ERR(rc)
-    ! call ESMF_InfoGet(bundle_info, key='/MPAS/nVertices', value=nVertices, rc=rc); ESMF_ERR(rc)
-    ! call ESMF_InfoGet(bundle_info, key='/MPAS/nEdges', value=nEdges, rc=rc); ESMF_ERR(rc)
-
     call ESMF_FieldBundleGet(wrtfb, fieldName='indexToCellID', field=field_indexToCellID, rc=rc); ESMF_ERR_RETURN(rc)
     call ESMF_FieldGet(field_indexToCellID, localDe=0, farrayPtr=array_cellid, rc=rc); ESMF_ERR_RETURN(rc)
-    ! call PIO_initdecomp(pioIoSystem(1), PIO_int, [nCells], array_cellid, iodescCells)
 
     call ESMF_FieldBundleGet(wrtfb, fieldName='indexToVertexID', field=field_indexToVertexID, rc=rc); ESMF_ERR_RETURN(rc)
     call ESMF_FieldGet(field_indexToVertexID, localDe=0, farrayPtr=array_vertexid, rc=rc); ESMF_ERR_RETURN(rc)
-    ! call PIO_initdecomp(pioIoSystem(1), PIO_int, [nVertices], array_vertexid, iodescVertices)
 
 #if 0
    ! FIXME disable 'edge' variable for now
@@ -381,11 +369,11 @@ module module_write_mpas_restart_field_bundle_pio
 
            if (rank == 0 .and. var_info_arr(i) % pio_type == PIO_char) then
                   rank = rank + 1
-           endif
+           end if
            ! FIXME pass hasTimeDimension and use it here
            if (rank == 0 .and. trim(arrName) == 'Time') then
                   rank = rank + 1
-           endif
+           end if
 
            added_time_dim = .false.
            if (rank > 0 .and. rank /= var_dim_names_count) then
@@ -419,16 +407,16 @@ module module_write_mpas_restart_field_bundle_pio
     end do ! i = 1, var_count
 
     retVal = PIO_createfile(pioIoSystem(1), pioFileDesc, iotype, trim(fileName), PIO_64BIT_OFFSET)
-    call errorHandle("Could not create "//trim(fileName), retVal)
+    call errorHandle('Could not create '//trim(fileName), retVal)
 
     ! Define dimensions
     do i = 1, size(dim_info_arr)
        if (trim(dim_info_arr(i) % dimName) == 'Time') then
            retVal = PIO_def_dim(pioFileDesc, trim(dim_info_arr(i) % dimName), PIO_UNLIMITED, dim_info_arr(i) % dimId)
-           call errorHandle("Could not define dimension", retVal)
+           call errorHandle('Could not define dimension', retVal)
        else
            retVal = PIO_def_dim(pioFileDesc, trim(dim_info_arr(i) % dimName), dim_info_arr(i) % dimSize, dim_info_arr(i) % dimId)
-           call errorHandle("Could not define dimension", retVal)
+           call errorHandle('Could not define dimension', retVal)
        end if
     end do
 
@@ -439,7 +427,7 @@ module module_write_mpas_restart_field_bundle_pio
       end do
 
       retVal = PIO_def_var(pioFileDesc, var_info_arr(i) % varName, var_info_arr(i) % pio_type, var_info_arr(i) % dimids, var_info_arr(i) % varid)
-      call errorHandle("Could not create "//trim(fileName), retVal)
+      call errorHandle('Could not create '//trim(fileName), retVal)
 
       ! Define variable attributes
       call ESMF_InfoGetAlloc(bundle_info, key='/NetCDF/FV3/variables/'//trim(var_info_arr(i) % varName)//'_att_names', values=var_att_names, itemCount=itemCount, rc=rc); ESMF_ERR(rc)
@@ -492,7 +480,7 @@ module module_write_mpas_restart_field_bundle_pio
    end do
 
    retVal = PIO_enddef(pioFileDesc)
-   call errorHandle("Could not end define mode", retVal)
+   call errorHandle('Could not end define mode', retVal)
 
 
    ! Write variables
@@ -509,19 +497,19 @@ module module_write_mpas_restart_field_bundle_pio
 
                 call ESMF_FieldGet(field, localDe=0, farrayPtr=array_r4_1d, rc=rc); ESMF_ERR_RETURN(rc)
                 call PIO_write_darray(pioFileDesc, var_info_arr(i) % varid, var_info_arr(i) % iodesc, array_r4_1d, retVal)
-                call errorHandle("Could not write "//trim(arrName), retVal)
+                call errorHandle('Could not write '//trim(arrName), retVal)
 
              else if (typekind == ESMF_TYPEKIND_R8) then
 
                 call ESMF_FieldGet(field, localDe=0, farrayPtr=array_r8_1d, rc=rc); ESMF_ERR_RETURN(rc)
                 call PIO_write_darray(pioFileDesc, var_info_arr(i) % varid, var_info_arr(i) % iodesc, array_r8_1d, retVal)
-                call errorHandle("Could not write "//trim(arrName), retVal)
+                call errorHandle('Could not write '//trim(arrName), retVal)
 
              else if (typekind == ESMF_TYPEKIND_I4) then
 
                 call ESMF_FieldGet(field, localDe=0, farrayPtr=array_i4_1d, rc=rc); ESMF_ERR_RETURN(rc)
                 call PIO_write_darray(pioFileDesc, var_info_arr(i) % varid, var_info_arr(i) % iodesc, array_i4_1d, retVal)
-                call errorHandle("Could not write "//trim(arrName), retVal)
+                call errorHandle('Could not write '//trim(arrName), retVal)
 
              else
                 if (mype == 0) write(0,*)'5) Unsupported typekind ', typekind
@@ -532,19 +520,19 @@ module module_write_mpas_restart_field_bundle_pio
 
                 call ESMF_FieldGet(field, localDe=0, farrayPtr=array_r4_2d, rc=rc); ESMF_ERR_RETURN(rc)
                 call PIO_write_darray(pioFileDesc, var_info_arr(i) % varid, var_info_arr(i) % iodesc, array_r4_2d, retVal)
-                call errorHandle("Could not write "//trim(arrName), retVal)
+                call errorHandle('Could not write '//trim(arrName), retVal)
 
              else if (typekind == ESMF_TYPEKIND_R8) then
 
                 call ESMF_FieldGet(field, localDe=0, farrayPtr=array_r8_2d, rc=rc); ESMF_ERR_RETURN(rc)
                 call PIO_write_darray(pioFileDesc, var_info_arr(i) % varid, var_info_arr(i) % iodesc, array_r8_2d, retVal)
-                call errorHandle("Could not write "//trim(arrName), retVal)
+                call errorHandle('Could not write '//trim(arrName), retVal)
 
              else if (typekind == ESMF_TYPEKIND_I4) then
 
                 call ESMF_FieldGet(field, localDe=0, farrayPtr=array_i4_2d, rc=rc); ESMF_ERR_RETURN(rc)
                 call PIO_write_darray(pioFileDesc, var_info_arr(i) % varid, var_info_arr(i) % iodesc, array_i4_2d, retVal)
-                call errorHandle("Could not write "//trim(arrName), retVal)
+                call errorHandle('Could not write '//trim(arrName), retVal)
 
              else
                 if (mype == 0) write(0,*)'6) Unsupported typekind ', typekind
@@ -556,19 +544,19 @@ module module_write_mpas_restart_field_bundle_pio
 
                 call ESMF_FieldGet(field, localDe=0, farrayPtr=array_r4_3d, rc=rc); ESMF_ERR_RETURN(rc)
                 call PIO_write_darray(pioFileDesc, var_info_arr(i) % varid, var_info_arr(i) % iodesc, array_r4_3d, retVal)
-                call errorHandle("Could not write "//trim(arrName), retVal)
+                call errorHandle('Could not write '//trim(arrName), retVal)
 
              else if (typekind == ESMF_TYPEKIND_R8) then
 
                 call ESMF_FieldGet(field, localDe=0, farrayPtr=array_r8_3d, rc=rc); ESMF_ERR_RETURN(rc)
                 call PIO_write_darray(pioFileDesc, var_info_arr(i) % varid, var_info_arr(i) % iodesc, array_r8_3d, retVal)
-                call errorHandle("Could not write "//trim(arrName), retVal)
+                call errorHandle('Could not write '//trim(arrName), retVal)
 
              else if (typekind == ESMF_TYPEKIND_I4) then
 
                 call ESMF_FieldGet(field, localDe=0, farrayPtr=array_i4_3d, rc=rc); ESMF_ERR_RETURN(rc)
                 call PIO_write_darray(pioFileDesc, var_info_arr(i) % varid, var_info_arr(i) % iodesc, array_i4_3d, retVal)
-                call errorHandle("Could not write "//trim(arrName), retVal)
+                call errorHandle('Could not write '//trim(arrName), retVal)
 
              else
                 if (mype == 0) write(0,*)'7) Unsupported typekind ', typekind, trim(arrName)
@@ -588,15 +576,15 @@ module module_write_mpas_restart_field_bundle_pio
                if (pio_type == PIO_real) then
                    call ESMF_InfoGet(bundle_info, key='/MPAS/'//trim(var_info_arr(i) % varName), value=r4Val, rc=rc); ESMF_ERR(rc)
                    retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, r4Val)
-                   call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                   call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                else if (pio_type == PIO_double) then
                    call ESMF_InfoGet(bundle_info, key='/MPAS/'//trim(var_info_arr(i) % varName), value=r8Val, rc=rc); ESMF_ERR(rc)
                    retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, r8Val)
-                   call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                   call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                else if (pio_type == PIO_int) then
                    call ESMF_InfoGet(bundle_info, key='/MPAS/'//trim(var_info_arr(i) % varName), value=iVal, rc=rc); ESMF_ERR(rc)
                    retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, iVal)
-                   call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                   call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                else
                    if (mype == 0) write(0,*)'1) Unsupported pio_type', pio_type
                end if
@@ -605,45 +593,45 @@ module module_write_mpas_restart_field_bundle_pio
                    if (trim(var_info_arr(i) % varName) == 'Time') then
                        r4Val = seconds_since_start
                        retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, [1], r4Val)
-                       call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                       call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                    else
                        call ESMF_InfoGetAlloc(bundle_info, key='/MPAS/'//trim(var_info_arr(i) % varName), values=real4Vals, rc=rc)
                        if (rc == ESMF_RC_ATTR_WRONGTYPE) then
                            call ESMF_InfoGet(bundle_info, key='/MPAS/'//trim(var_info_arr(i) % varName), value=r4Val, rc=rc); ESMF_ERR(rc)
                            retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, [1], r4Val)
-                           call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                           call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                        else
                            ESMF_ERR(rc)
                            retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, real4Vals)
-                           call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                           call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                        end if
                    end if
                else if (pio_type == PIO_double) then
                    if (trim(var_info_arr(i) % varName) == 'Time') then
                        r8Val = seconds_since_start
                        retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, [1], r8Val)
-                       call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                       call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                    else
                        call ESMF_InfoGetAlloc(bundle_info, key='/MPAS/'//trim(var_info_arr(i) % varName), values=real8Vals, rc=rc)
                        if (rc == ESMF_RC_ATTR_WRONGTYPE) then
                            call ESMF_InfoGet(bundle_info, key='/MPAS/'//trim(var_info_arr(i) % varName), value=r8Val, rc=rc); ESMF_ERR(rc)
                            retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, [1], r8Val)
-                           call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                           call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                        else
                            ESMF_ERR(rc)
                            retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, real8Vals)
-                           call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                           call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                        end if
                    end if
                else if (pio_type == PIO_int) then
                    call ESMF_InfoGetAlloc(bundle_info, key='/MPAS/'//trim(var_info_arr(i) % varName), values=intVals, rc=rc); ESMF_ERR(rc)
                    retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, intVals)
-                   call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                   call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                else if (pio_type == PIO_char) then
                    textVal = ' '
                    call ESMF_InfoGet(bundle_info, key='/MPAS/'//trim(var_info_arr(i) % varName), value=textVal, rc=rc); ESMF_ERR(rc)
                    retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, [1], textVal)
-                   call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                   call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                else
                    if (mype == 0) write(0,*)'2) Unsupported pio_type', pio_type
                end if
@@ -656,7 +644,7 @@ module module_write_mpas_restart_field_bundle_pio
                        call ESMF_InfoGet(bundle_info, key='/MPAS/'//trim(var_info_arr(i) % varName), value=textVal, rc=rc); ESMF_ERR(rc)
                    end if
                    retVal = PIO_put_var(pioFileDesc, var_info_arr(i) % varid, [1,1], textVal)
-                   call errorHandle("Could not write "//trim(var_info_arr(i) % varName), retVal)
+                   call errorHandle('Could not write '//trim(var_info_arr(i) % varName), retVal)
                else
                    if (mype == 0) write(0,*)'3) Unsupported pio_type', pio_type
                end if
@@ -705,10 +693,10 @@ module module_write_mpas_restart_field_bundle_pio
     subroutine set_iodesc(array_shape, var_info)
 
        integer, intent(in) :: array_shape(:)
-       type (var_info_t), intent(inout) :: var_info
+       type(var_info_t), intent(inout) :: var_info
 
        integer, allocatable  :: compdof(:)
-       integer :: i1, i2, i3, i4, i5
+       integer :: i1, i2, i3
        integer :: n, ndim, ncompdof
        integer :: k
 
@@ -789,8 +777,7 @@ module module_write_mpas_restart_field_bundle_pio
         implicit none
         character(len=*),       intent(in)    :: errMsg
         integer,                intent(in)    :: retVal
-        integer :: lretval
-        if (retVal .ne. PIO_NOERR) then
+        if (retVal /= PIO_NOERR) then
             write(*,*) retVal,errMsg
             call PIO_closefile(pioFileDesc)
             stop 1
