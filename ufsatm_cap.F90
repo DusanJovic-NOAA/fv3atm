@@ -509,7 +509,7 @@ module ufsatm_cap_mod
     call pio_setdebuglevel(pio_debug_level)
 
 #endif
-
+#ifdef FV3
     ! set cpl_scalars from config. Default to null values for standalone
     flds_scalar_name = ''
     flds_scalar_num = 0
@@ -564,7 +564,7 @@ module ufsatm_cap_mod
           call ESMF_LogWrite(trim(subname)//' : flds_scalar_index_ntile = '//trim(msgString), ESMF_LOGMSG_INFO)
        endif
     end if
-
+#endif
 !------------------------------------------------------------------------
 ! get config variables
 !
