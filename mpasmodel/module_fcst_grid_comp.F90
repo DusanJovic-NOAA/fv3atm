@@ -285,6 +285,8 @@ contains
       ! Initialize ESMF error message.
       rc = ESMF_SUCCESS
 
+      l_fill_value = 0.0_ESMF_KIND_R8
+
       call ufs_mpas_get_esmf_mesh(mesh, rc=rc); ESMF_ERR(rc)
 
       call ESMF_StateGet(exportState, stateintent=stateintent, rc=rc); ESMF_ERR(rc)
