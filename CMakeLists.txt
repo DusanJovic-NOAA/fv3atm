@@ -343,6 +343,20 @@ if (MPASMODEL)
   add_definitions(-DMPASMODEL)
   add_definitions(-DMPAS_USE_MPI_F08)
   set(DYCORE_TARGET ${DYCORE_TARGET_MPASMODEL})
+#
+# We should not add -DMPI globally for this subdirectory, because it breaks code
+# in MPAS-Model physics:
+#
+# /scratch3/NCEPDEV/fv3-cam/Dusan.Jovic/ufs/ufs_with_mpasmodel/up4/ufs-weather-model/UFSATM/mpasmodel/MPAS-Model/src/core_atmosphere/physics/physics_noahmp/drivers/mpas/NoahmpReadTableMod.F90:134:98:
+#
+#  134 |                          KC25I, AKCI, KO25I, AKOI, AVCMXI, VCMX25I, BPI, MPI, FOLNMXI, QE25I, AREF,   &
+#      |                                                                          1
+#
+#Error: Invalid character in name at (1)
+#
+# Remove it for now
+#
+  REMOVE_DEFINITIONS(-DMPI)
 
   # MPAS model
   add_subdirectory(mpasmodel)
