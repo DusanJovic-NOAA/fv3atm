@@ -411,6 +411,9 @@ contains
              mpas_pool_field_info % nhalolayers == -1) then
             call mpas_log_write(subname//' Invalid field information for "' // trim(field_name) // '"', MPAS_LOG_CRIT)
          end if
+         if (.not. mpas_pool_field_info % isActive) then
+             cycle
+         end if
 
          attLists => null()
          dimNames = ''
@@ -756,6 +759,9 @@ contains
              mpas_pool_field_info % ndims == -1 .or. &
              mpas_pool_field_info % nhalolayers == -1) then
             call mpas_log_write(subname//' Invalid field information for "' // trim(field_name) // '"', MPAS_LOG_CRIT)
+         end if
+         if (.not. mpas_pool_field_info % isActive) then
+             cycle
          end if
 
          dimNames = ''
@@ -1687,7 +1693,7 @@ contains
       use mpas_derived_types, only : mpas_pool_type
       use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_dimension, mpas_pool_get_array
       use mpas_pool_routines, only : mpas_pool_get_config
-      use mpas_dmpar,         only : mpas_dmpar_sum_int_array
+      use mpas_dmpar,         only : mpas_dmpar_sum_int_array, mpas_dmpar_bcast_ints, IO_NODE
 
       type(ESMF_Mesh), intent(out) :: mesh
       integer, intent(out) :: rc
@@ -1707,7 +1713,7 @@ contains
       integer, dimension(:,:), pointer :: cellsOnVertex, verticesOnCell
       integer, dimension(:), pointer :: nCellsOwnedIndices, nEdgesOwnedIndices, nVerticesOwnedIndices
       integer, pointer :: nCells, nVertices, vertexDegree
-      integer :: i, j, localpet, nprocs, iloc
+      integer :: i, j, localpet, nprocs, iloc, istat
       integer, dimension(:), pointer :: part_ids
       integer :: nVertex_on_pet
       character(len=StrKIND), pointer :: config_block_decomp_file_prefix
@@ -1724,11 +1730,22 @@ contains
       write(fname,'(A,I0)') trim(config_block_decomp_file_prefix), nprocs
 
       allocate(part_ids(nCellsGlobal))
-      open(unit=10,file=trim(fname), status='old', action='read')
-      do i =1,nCellsGlobal
-         read(10,*) part_ids(i)
-      end do
-      close(10)
+      if (localpet == IO_NODE) then
+         open(unit=10,file=trim(fname), status='old', action='read', iostat=istat)
+         if (istat /= 0) then
+            write(0,*)'FIXME: ', trim(fname), ' is not present'
+            stop 1  !FIXME
+         end if
+         do i =1,nCellsGlobal
+            read(10,*,iostat=istat) part_ids(i)
+            if (istat /= 0) then
+               write(0,*)'FIXME: error reading ', trim(fname), ' line = ', j
+               stop 1  !FIXME
+            end if
+         end do
+         close(10)
+      end if
+      call mpas_dmpar_bcast_ints(domain_ptr % dminfo, nCellsGlobal, part_ids)
 
       call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh', meshPool)
       call mpas_pool_get_dimension(meshPool, 'nCells', nCells)
