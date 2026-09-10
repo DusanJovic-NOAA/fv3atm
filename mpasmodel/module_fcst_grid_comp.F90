@@ -109,6 +109,7 @@ contains
       type(ESMF_Info) :: info
       integer :: ngrids
       logical, allocatable :: is_moving(:)
+      logical, pointer :: config_apply_lbcs_ptr
       integer                       :: num_restart_fh
       real,dimension(:),allocatable :: restart_fh
 
@@ -185,6 +186,8 @@ contains
       call mpas_dmpar_sum_int(domain % dminfo, nCellsSolve, nCellsGlobal)
       call mpas_dmpar_sum_int(domain % dminfo, nEdgesSolve, nEdgesGlobal)
 
+      call mpas_pool_get_config(domain % blocklist % configs, 'config_apply_lbcs', config_apply_lbcs_ptr)
+
       ngrids = 0
       if (quilting) then
          call ufs_mpas_wgc_output_initialize(exportState, ngrids)
@@ -195,7 +198,7 @@ contains
       is_moving = .false.
       call ESMF_InfoGetFromHost(exportState, info=info, rc=rc); ESMF_ERR(rc)
       call ESMF_InfoSet(info, key='/NetCDF/FV3/ngrids', value=ngrids, rc=rc); ESMF_ERR(rc)
-      call ESMF_InfoSet(info, key='/NetCDF/FV3/top_parent_is_global', value=.false., rc=rc); ESMF_ERR(rc)
+      call ESMF_InfoSet(info, key='/NetCDF/FV3/top_parent_is_global', value=.not.config_apply_lbcs_ptr, rc=rc); ESMF_ERR(rc)
       call ESMF_InfoSet(info, key='is_moving', values=is_moving, rc=rc); ESMF_ERR(rc)
       deallocate(is_moving)
 

@@ -730,7 +730,7 @@
        end if
 
        ! Start creating wrtGrid(s)
-
+#ifdef FV3
        if (n == 1 .and. top_parent_is_global .and. history_file_on_native_grid) then
          do tl=1,6
            decomptile(1,tl) = 1
@@ -750,8 +750,10 @@
 
          create_wrtGrid_cubed_sphere = .false.
        endif
+#endif
 
        if ( trim(output_grid(n)) == 'cubed_sphere_grid' ) then
+#if FV3
          !*** Create cubed sphere grid from file
          if (top_parent_is_global .and. n == 1) then
            do tl=1,6
@@ -807,7 +809,11 @@
          wrt_int_state%out_grid_info(n)%i_end   = maxIndex(1) - minIndex(1) + 1
          wrt_int_state%out_grid_info(n)%j_start = 1
          wrt_int_state%out_grid_info(n)%j_end   = maxIndex(2) - minIndex(2) + 1
-
+#else
+         write(0,*)'cubed_sphere_grid is only supported in FV3'
+         rc=1
+         ESMF_ERR(rc)
+#endif
        else  ! non 'cubed_sphere_grid'
          if ( trim(output_grid(n)) == 'gaussian_grid') then
 
@@ -1270,7 +1276,7 @@
            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
            if (fcstItemNameList(i)(1:18) == 'cubed_sphere_grid_') then
-
+#if FV3
              if (create_wrtGrid_cubed_sphere) then
                ! create a grid from fcstGrid on forecast grid comp, by rebalancing distgrid to the local PETs
                ! access the acceptor DistGrid
@@ -1290,6 +1296,11 @@
              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
              wrt_geomtype = ESMF_GEOMTYPE_GRID
+#else
+             write(0,*)'cubed_sphere_grid is only supported in FV3'
+             rc=1
+             ESMF_ERR(rc)
+#endif
 
            else if (fcstItemNameList(i)(1:8) == 'restart_') then
              ! If this is a 'restart' bundle the actual grid that the output field ('field_work' below) is created on
@@ -1946,12 +1957,14 @@
                           attrList=attNameList(1:j-1), rc=rc)
    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+#if FV3
    ! add the transfer attributes from importState to special cubed_sphere grid
    if (n == 1 .and. top_parent_is_global .and. history_file_on_native_grid) then
      call ESMF_AttributeAdd(wrtGrid_cubed_sphere, convention="NetCDF", purpose="FV3", &
                             attrList=attNameList(1:j-1), rc=rc)
      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
    endif
+#endif
 
 ! loop over the added attributes, access the value (only scalar allowed),
 ! and set them on the grid
@@ -1998,11 +2011,13 @@
                               name=trim(attNameList(i)), value=valueS, rc=rc)
        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+#if FV3
        if (n == 1 .and. top_parent_is_global .and. history_file_on_native_grid) then
          call ESMF_AttributeSet(wrtGrid_cubed_sphere, convention="NetCDF", purpose="FV3", &
                                 name=trim(attNameList(i)), value=valueS, rc=rc)
          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
        endif
+#endif
 
      else if (typekindList(i) == ESMF_TYPEKIND_I4) then
        call ESMF_AttributeGet(imp_state_write,                    &

@@ -117,6 +117,9 @@ contains
       integer :: lon_varid, lat_varid, timeiso_varid
       integer, dimension(:), allocatable :: dimids
       integer :: xtype
+      integer :: quant_mode
+      integer :: ishuffle
+      logical :: shuffle
 
       integer :: rank, deCount, localDeCount, dimCount, tileCount
       integer :: start_i, start_j
@@ -434,16 +437,17 @@ contains
             ncerr = nf90_def_var(ncid, trim(varName), xtype, dimids, var_info_arr(i) % varid) ; NC_ERR_STOP(ncerr)
 
             ! compression, shuffling  and chunking
-#if 0
             if (ideflate(grid_id) > 0 .or. zstandard_level(grid_id) > 0) then
                par_access = NF90_COLLECTIVE
+#if 0
                if (rank == 2 .and. ichunk2d(grid_id) > 0 .and. jchunk2d(grid_id) > 0) then
                   chunksizes = [ichunk2d(grid_id), jchunk2d(grid_id),            1]
-                  ncerr = nf90_def_var_chunking(ncid, varids(i), NF90_CHUNKED, chunksizes) ; NC_ERR_STOP(ncerr)
+                  ncerr = nf90_def_var_chunking(ncid, var_info_arr(i) % varid, NF90_CHUNKED, chunksizes) ; NC_ERR_STOP(ncerr)
                else if (rank == 3 .and. ichunk3d(grid_id) > 0 .and. jchunk3d(grid_id) > 0 .and. kchunk3d(grid_id) > 0) then
                   chunksizes = [ichunk3d(grid_id), jchunk3d(grid_id), min(kchunk3d(grid_id),fldlev(i)), 1]
-                  ncerr = nf90_def_var_chunking(ncid, varids(i), NF90_CHUNKED, chunksizes) ; NC_ERR_STOP(ncerr)
+                  ncerr = nf90_def_var_chunking(ncid, var_info_arr(i) % varid, NF90_CHUNKED, chunksizes) ; NC_ERR_STOP(ncerr)
                end if
+#endif
 
                ishuffle = NF90_NOSHUFFLE
                ! shuffle filter on when using lossy compression
@@ -451,10 +455,10 @@ contains
                   ishuffle = NF90_SHUFFLE
                end if
                if (ideflate(grid_id) > 0) then
-                  ncerr = nf90_def_var_deflate(ncid, varids(i), ishuffle, 1, ideflate(grid_id)) ; NC_ERR_STOP(ncerr)
+                  ncerr = nf90_def_var_deflate(ncid, var_info_arr(i) % varid, ishuffle, 1, ideflate(grid_id)) ; NC_ERR_STOP(ncerr)
                else if (zstandard_level(grid_id) > 0) then
-                  ncerr = nf90_def_var_deflate(ncid, varids(i), ishuffle, 0, 0) ; NC_ERR_STOP(ncerr)
-                  ncerr = nf90_def_var_zstandard(ncid, varids(i), zstandard_level(grid_id)) ; NC_ERR_STOP(ncerr)
+                  ncerr = nf90_def_var_deflate(ncid, var_info_arr(i) % varid, ishuffle, 0, 0) ; NC_ERR_STOP(ncerr)
+                  ncerr = nf90_def_var_zstandard(ncid, var_info_arr(i) % varid, zstandard_level(grid_id)) ; NC_ERR_STOP(ncerr)
                end if
 
                ! turn on quantize only for 3d variables and if requested
@@ -473,10 +477,9 @@ contains
                      call ESMF_Finalize(endflag=ESMF_END_ABORT)
                   end if
 
-                  ncerr = nf90_def_var_quantize(ncid, varids(i), quant_mode, quantize_nsd(grid_id)) ; NC_ERR_STOP(ncerr)
+                  ncerr = nf90_def_var_quantize(ncid, var_info_arr(i) % varid, quant_mode, quantize_nsd(grid_id)) ; NC_ERR_STOP(ncerr)
                end if
             end if
-#endif
 
             if (par) then
                ncerr = nf90_var_par_access(ncid, var_info_arr(i) % varid, par_access); NC_ERR_STOP(ncerr)

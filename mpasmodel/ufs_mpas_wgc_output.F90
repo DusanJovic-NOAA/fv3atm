@@ -1,6 +1,10 @@
 #define ESMF_ERR(rc) \
-  if (rc /= 0) write(0,'(A,A,I0,A,I0)') __FILE__,':',__LINE__, ' ESMF rc: ', rc; \
-  if (rc /= 0) call ESMF_Finalize(endflag=ESMF_END_ABORT)
+  if (rc /= ESMF_SUCCESS) write(0,'(A,A,I0,A,I0)') __FILE__,':',__LINE__, ' ESMF rc: ', rc; \
+  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! #define ESMF_ERR(rc) \
+!   if (rc /= 0) write(0,'(A,A,I0,A,I0)') __FILE__,':',__LINE__, ' ESMF rc: ', rc; \
+!   if (rc /= 0) call ESMF_Finalize(endflag=ESMF_END_ABORT)
 
 #define ASSERT(a) \
   if ((a) .neqv. .true. ) write(0,'(A,A,I0,A)') __FILE__,':',__LINE__, ' assertion failed'; \
@@ -81,6 +85,8 @@ module ufs_mpas_wgc_output
    type(ufs_mpas_output_type), dimension(:), allocatable, public :: ufs_mpas_outputs
    integer, public :: num_streams
 
+   type(ESMF_Mesh), private :: the_mpas_esmf_mesh
+
    ! FIXME: Temporary fix to get bit-identical outputs from both PIO and SMIOL
    ! Use this value instead the one defined in mpas_io.F to be consistent between PIO and SMIOL
    integer, parameter :: MPAS_INT_FILLVAL_NEG_HUGE = -huge(0)
@@ -88,6 +94,8 @@ module ufs_mpas_wgc_output
 contains
 
    subroutine ufs_mpas_wgc_output_initialize(exportState, ngrids)
+
+      use mpas_dmpar,         only : mpas_dmpar_bcast_int, mpas_dmpar_bcast_char, IO_NODE
 
       implicit none
 
@@ -97,10 +105,38 @@ contains
       ! Local
       integer :: i, rc
       type(ESMF_Info) :: info
+      integer :: localpet
       logical :: asOkay
+      integer :: ufs_mpas_streams_content_len
+      character(len=:), allocatable :: ufs_mpas_streams_content
+      logical :: success
       type(ESMF_HConfig) :: hconfig, streams_hconfig, stream_hconfig, grid_spec_hconfig
 
-      hconfig = ESMF_HConfigCreate(filename='ufs_mpas_streams.yaml', rc=rc); ESMF_ERR(rc)
+      localpet = domain_ptr % dminfo % my_proc_id
+
+      ! read the content of the ufs mpas streams config file into a character string
+      ! only on the IO_NODE, then bradcast it to all ranks in the communicator
+
+      if (localpet == IO_NODE) then
+         call read_entire_file('ufs_mpas_streams.yaml', ufs_mpas_streams_content, success)
+         if (.not. success) then
+            ESMF_ERR(1)
+         end if
+         ufs_mpas_streams_content_len = len(ufs_mpas_streams_content)
+      end if
+
+      call mpas_dmpar_bcast_int(domain_ptr % dminfo, ufs_mpas_streams_content_len, IO_NODE)
+
+      if (.not. allocated(ufs_mpas_streams_content)) then
+         allocate(character(len=ufs_mpas_streams_content_len) :: ufs_mpas_streams_content)
+      end if
+      call mpas_dmpar_bcast_char(domain_ptr % dminfo, ufs_mpas_streams_content, IO_NODE)
+
+      ! hconfig = ESMF_HConfigCreate(filename='ufs_mpas_streams.yaml', rc=rc); ESMF_ERR(rc)
+      hconfig = ESMF_HConfigCreate(content=ufs_mpas_streams_content, rc=rc); ESMF_ERR(rc)
+      if (localpet == IO_NODE) then
+         call ESMF_HConfigFileSave(hconfig, filename="saveMe.yml", rc=rc); ESMF_ERR(rc)
+      end if
 
       num_streams = ESMF_HConfigGetSize(hconfig, keyString='streams', rc=rc); ESMF_ERR(rc)
 
@@ -328,7 +364,7 @@ contains
 
       use mpas_attlist,       only : att_list_type, att_lists_type, &
                                      MPAS_ATT_INT, MPAS_ATT_REAL, MPAS_ATT_TEXT, &
-                                     MPAS_LOG_CRIT
+                                     MPAS_LOG_CRIT, MPAS_LOG_WARN
       use mpas_derived_types, only : field1dinteger, field2dinteger, field1dreal, field2dreal, field3dreal, &
                                      mpas_pool_type, mpas_pool_field_info_type, mpas_pool_real, mpas_pool_integer, block_type
       use mpas_pool_routines, only : pool_print_members, mpas_pool_get_field, mpas_pool_get_field_info, mpas_pool_get_dimension
@@ -451,7 +487,8 @@ contains
                call ESMF_InfoSet(field_info, key='/NetCDF/FV3/missing_value', value=MPAS_INT_FILLVAL_NEG_HUGE, rc=rc); ESMF_ERR(rc)
                nullify(field_2d_integer)
             case default
-               call mpas_log_write(subname//' Unsupported field rank $i', MPAS_LOG_CRIT, intArgs=[mpas_pool_field_info % ndims])
+               call mpas_log_write(subname//' Unsupported field rank $i', MPAS_LOG_WARN, intArgs=[mpas_pool_field_info % ndims])
+               cycle
             end select
 
          case (mpas_pool_real)
@@ -473,6 +510,7 @@ contains
                   ptr_r4_d1 = field_1d_real%array(1:nVerticesSolve)
                else
                   if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims)), ' ', trim(field_name)
+                  cycle
                end if
 
                call ESMF_InfoGetFromHost(field, info=field_info, rc=rc); ESMF_ERR(rc)
@@ -549,10 +587,14 @@ contains
                nullify(field_3d_real)
 
             case default
-               call mpas_log_write(subname//' Unsupported field rank $i', MPAS_LOG_CRIT, intArgs=[mpas_pool_field_info % ndims])
+               write(0,*)'Unsupported field rank ', trim(field_name), mpas_pool_field_info % ndims
+               call mpas_log_write(subname//' Unsupported field rank $i', MPAS_LOG_WARN, intArgs=[mpas_pool_field_info % ndims])
+               cycle
             end select
          case default
-            call mpas_log_write(subname//' Unsupported field type (Must be one of: integer, real)', MPAS_LOG_CRIT)
+            write(0,*)'Unsupported field type (Must be one of: integer, real)', trim(field_name), mpas_pool_field_info % fieldtype
+            call mpas_log_write(subname//' Unsupported field type (Must be one of: integer, real)', MPAS_LOG_WARN)
+            cycle
          end select
 
          if (.not. isVarArray) then
@@ -608,6 +650,8 @@ contains
       do i = 1, size(dim_info_arr)
          call ESMF_InfoSet(bundle_info, key='/NetCDF/MPAS/ungridded_dimensions/'//trim(dim_info_arr(i) % dimName), value=dim_info_arr(i) % dimSize, rc=rc); ESMF_ERR(rc)
       end do
+
+      return
 
    contains
 
@@ -707,7 +751,7 @@ contains
 
    subroutine ufs_mpas_update_output_bundle(output_bundle, output_vars, rc)
 
-      use mpas_attlist,       only : MPAS_LOG_CRIT
+      use mpas_attlist,       only : MPAS_LOG_CRIT, MPAS_LOG_WARN
       use mpas_derived_types, only : field1dinteger, field2dinteger, field1dreal, field2dreal, field3dreal
       use mpas_derived_types, only : mpas_pool_type, mpas_pool_field_info_type, mpas_pool_real, mpas_pool_integer, block_type
       use mpas_pool_routines, only : pool_print_members, mpas_pool_get_field, mpas_pool_get_field_info, mpas_pool_get_dimension
@@ -787,7 +831,8 @@ contains
                ptr_i4_d2 = field_2d_integer%array(:,1:nCellsSolve)
                nullify(field_2d_integer)
             case default
-               call mpas_log_write(subname//' Unsupported field rank $i', MPAS_LOG_CRIT, intArgs=[mpas_pool_field_info % ndims])
+               call mpas_log_write(subname//' Unsupported field rank $i', MPAS_LOG_WARN, intArgs=[mpas_pool_field_info % ndims])
+               cycle
             end select
 
          case (mpas_pool_real)
@@ -796,6 +841,14 @@ contains
             case (1)
                call mpas_pool_get_field(allFields, trim(field_name), field_1d_real, timelevel=1)
                dimNames(1:nDims) = field_1d_real % dimNames
+               if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
+                  continue
+               else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
+                  continue
+               else
+                  if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims)), ' ', trim(field_name)
+                  cycle
+               end if
                call ESMF_FieldBundleGet(output_bundle, fieldName=field_name, field=field, rc=rc); ESMF_ERR(rc)
                call ESMF_FieldGet(field, farrayPtr=ptr_r4_d1, rc=rc); ESMF_ERR(rc)
                if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
@@ -810,6 +863,14 @@ contains
             case (2)
                call mpas_pool_get_field(allFields, trim(field_name), field_2d_real, timelevel=1)
                dimNames(1:nDims) = field_2d_real % dimNames
+               if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
+                  continue
+               else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
+                  continue
+               else
+                  if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims)), ' ', trim(field_name)
+                  cycle
+               end if
                call ESMF_FieldBundleGet(output_bundle, fieldName=field_name, field=field, rc=rc); ESMF_ERR(rc)
                call ESMF_FieldGet(field, farrayPtr=ptr_r4_d2, rc=rc); ESMF_ERR(rc)
                if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
@@ -825,6 +886,14 @@ contains
             case (3)
                call mpas_pool_get_field(allFields, trim(field_name), field_3d_real, timelevel=1)
                dimNames(1:nDims) = field_3d_real % dimNames
+               if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nCells') then
+                  continue
+               else if (trim(dimNames(mpas_pool_field_info%nDims)) == 'nVertices') then
+                  continue
+               else
+                  if (localpet == 0) write(0,*)'Unsupported dim: ', trim(dimNames(mpas_pool_field_info%nDims)), ' ', trim(field_name)
+                  cycle
+               end if
 
                if (field_3d_real % isVarArray) then
                   do k = 1, size(field_3d_real % constituentNames)
@@ -854,10 +923,12 @@ contains
                nullify(field_3d_real)
 
             case default
-               call mpas_log_write(subname//' Unsupported field rank $i', MPAS_LOG_CRIT, intArgs=[mpas_pool_field_info % ndims])
+               call mpas_log_write(subname//' Unsupported field rank $i', MPAS_LOG_WARN, intArgs=[mpas_pool_field_info % ndims])
+               cycle
             end select
          case default
-            call mpas_log_write(subname//' Unsupported field type (Must be one of: integer, real)', MPAS_LOG_CRIT)
+            call mpas_log_write(subname//' Unsupported field type (Must be one of: integer, real)', MPAS_LOG_WARN)
+            cycle
          end select
 
       end do
@@ -1698,6 +1769,7 @@ contains
       type(ESMF_Mesh), intent(out) :: mesh
       integer, intent(out) :: rc
 
+      logical :: mesh_is_created
       integer :: numNodes
       integer, dimension(:), allocatable :: nodeIds, nodeOwners
       real(ESMF_KIND_R8), dimension(:), allocatable :: nodeCoords
@@ -1722,6 +1794,12 @@ contains
       integer, allocatable :: verticesOwnedByThisPET(:), new_verticesOwnedByThisPET(:)
 
       rc = 0
+
+      mesh_is_created = ESMF_MeshIsCreated(the_mpas_esmf_mesh, rc=rc); ESMF_ERR(rc)
+      if (mesh_is_created) then
+         mesh = the_mpas_esmf_mesh
+         return
+      end if
 
       localpet = domain_ptr % dminfo % my_proc_id
       nprocs = domain_ptr % dminfo % nprocs
@@ -1845,17 +1923,19 @@ contains
       ASSERT(ielemConn == numElemsConn)
       ! write(0,*) 'numElemsConn = ', numElemsConn
 
-      mesh = ESMF_MeshCreate(parametricDim=2, &
-                             spatialDim=2, &
-                             coordSys=ESMF_COORDSYS_SPH_RAD, &
-                             nodeIds=nodeIds, &
-                             nodeCoords=nodeCoords, &
-                             nodeOwners=nodeOwners, &
-                             elementIds=elemIds, &
-                             elementTypes=elemTypes, &
-                             elementConn=elemConn, &
-                             elementCoords=elemCoords, &
-                             rc=rc); ESMF_ERR(rc)
+      the_mpas_esmf_mesh = ESMF_MeshCreate(parametricDim=2, &
+                                           spatialDim=2, &
+                                           coordSys=ESMF_COORDSYS_SPH_RAD, &
+                                           nodeIds=nodeIds, &
+                                           nodeCoords=nodeCoords, &
+                                           nodeOwners=nodeOwners, &
+                                           elementIds=elemIds, &
+                                           elementTypes=elemTypes, &
+                                           elementConn=elemConn, &
+                                           elementCoords=elemCoords, &
+                                           rc=rc); ESMF_ERR(rc)
+
+      mesh = the_mpas_esmf_mesh
 
    end subroutine ufs_mpas_get_esmf_mesh
 
@@ -3219,5 +3299,47 @@ contains
       close(file_unit)
 
    end subroutine parse_output_list_vars
+
+   subroutine read_entire_file(filename, file_contents, success)
+      implicit none
+      character(len=*), intent(in) :: filename
+      character(len=:), allocatable, intent(out) :: file_contents
+      logical, intent(out) :: success
+      integer :: file_size, unit_num, ios
+
+      success = .false.
+
+      ! Get file size
+      inquire(file=filename, size=file_size)
+
+      if (file_size == -1) then
+         print *, "Error: File not found or cannot be accessed"
+         return
+      end if
+
+      ! Allocate character array
+      allocate(character(len=file_size) :: file_contents)
+
+      ! Open and read the file
+      open(newunit=unit_num, file=filename, status='old', action='read', &
+         access='stream', form='unformatted', iostat=ios)
+
+      if (ios /= 0) then
+         print *, "Error opening file"
+         return
+      end if
+
+      read(unit_num, iostat=ios) file_contents
+
+      if (ios /= 0) then
+         print *, "Error reading file"
+         close(unit_num)
+         return
+      end if
+
+      close(unit_num)
+      success = .true.
+
+   end subroutine read_entire_file
 
 end module ufs_mpas_wgc_output
